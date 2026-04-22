@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Demo — RAGBot Widget Embed</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #f9f9fb; color: #333; padding: 40px; max-width: 800px; margin: 0 auto; }
+  h1 { color: #6c63ff; margin-bottom: 8px; }
+  p { color: #666; line-height: 1.6; }
+  code { background: #ebebf5; padding: 2px 8px; border-radius: 4px; font-size: 13px; }
+  pre { background: #1a1a2e; color: #a8e6cf; padding: 20px; border-radius: 10px; overflow-x: auto; font-size: 13px; }
+  .badge { display: inline-block; background: #6c63ff; color: #fff; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>🤖 RAGBot — Página Demo</h1>
+  <p>Esta es una página de demostración. El chatbot está cargado como <strong>widget flotante</strong> en la esquina inferior derecha.</p>
+
+  <br>
+  <h2>Cómo embeber en tu sitio</h2>
+  <pre>&lt;!-- Agrega esto antes del &lt;/body&gt; --&gt;
+&lt;script&gt;
+  window.RAGBOT_API_URL = "https://tuapi.com";
+&lt;/script&gt;
+&lt;script src="https://tuapi.com/api/v1/chatbots/TU_BOT_ID/widget.js"&gt;&lt;/script&gt;</pre>
+
+  <p>O bien, usa el <span class="badge">Dashboard</span> → Chatbot → Embed para obtener el código exacto.</p>
+
+  <!-- ═══ EMBED DEL WIDGET ═══════════════════════════════════ -->
+  <script>
+    // Configuración automática desde el servidor
+    window.RAGBOT_API_URL = "http://localhost:8000";
+  </script>
+  <script>
+    // Inicialización manual (alternativa al script del servidor)
+    document.addEventListener('DOMContentLoaded', function() {
+      var s = document.createElement('script');
+      s.src = window.RAGBOT_API_URL + '/static/widget.js';
+      s.onload = function() {
+        window.RAGBot.init({
+          botId: 'TU_BOT_ID_AQUI',
+          apiUrl: window.RAGBOT_API_URL,
+          primaryColor: '#6c63ff',
+          position: 'bottom-right',
+          botName: 'Mi Asistente',
+          welcomeMessage: '¡Hola! Soy tu asistente virtual. ¿En qué puedo ayudarte hoy?',
+          showBranding: true,
+        });
+      };
+      document.body.appendChild(s);
+    });
+  </script>
+</body>
+</html>

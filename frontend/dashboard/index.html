@@ -1,0 +1,1444 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAGBot Dashboard</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg: #0a0a0f;
+    --bg2: #111118;
+    --bg3: #1a1a25;
+    --border: #2a2a3a;
+    --border2: #3a3a50;
+    --accent: #6c63ff;
+    --accent2: #4ade80;
+    --accent3: #f59e0b;
+    --danger: #ef4444;
+    --text: #e8e8f0;
+    --text2: #9090b0;
+    --text3: #5a5a7a;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'IBM Plex Sans', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+  }
+
+  /* ── Sidebar ─────────────────── */
+  .sidebar {
+    width: 240px;
+    min-height: 100vh;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    z-index: 100;
+  }
+
+  .sidebar-logo {
+    padding: 24px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+
+  .logo-icon {
+    width: 32px; height: 32px;
+    background: var(--accent);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+  }
+
+  .logo-text { font-family: var(--mono); font-size: 14px; font-weight: 600; letter-spacing: 1px; }
+  .logo-ver { font-size: 10px; color: var(--text3); font-family: var(--mono); }
+
+  .nav { flex: 1; padding: 16px 0; }
+
+  .nav-section { font-size: 10px; color: var(--text3); font-family: var(--mono);
+    letter-spacing: 2px; padding: 12px 20px 6px; text-transform: uppercase; }
+
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 20px; color: var(--text2);
+    cursor: pointer; transition: all 0.15s; font-size: 13.5px;
+    border-left: 2px solid transparent;
+  }
+
+  .nav-item:hover { color: var(--text); background: var(--bg3); }
+  .nav-item.active { color: var(--accent); border-left-color: var(--accent); background: rgba(108,99,255,0.08); }
+  .nav-item .icon { width: 16px; text-align: center; font-size: 14px; }
+
+  .sidebar-footer {
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+  }
+
+  .user-info { display: flex; align-items: center; gap: 10px; }
+  .user-avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--accent); display: flex; align-items: center;
+    justify-content: center; font-size: 13px; font-weight: 600;
+  }
+  .user-name { font-size: 13px; font-weight: 500; }
+  .user-role { font-size: 11px; color: var(--text3); font-family: var(--mono); }
+  .btn-logout {
+    margin-top: 10px; width: 100%; padding: 7px;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text2); border-radius: 6px; cursor: pointer;
+    font-size: 12px; transition: all 0.15s;
+  }
+  .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
+
+  /* ── Main ──────────────────────── */
+  .main {
+    margin-left: 240px;
+    flex: 1;
+    min-height: 100vh;
+  }
+
+  .topbar {
+    height: 56px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 28px;
+    background: var(--bg2);
+    position: sticky; top: 0; z-index: 50;
+  }
+
+  .page-title { font-size: 15px; font-weight: 600; }
+  .topbar-right { display: flex; gap: 8px; align-items: center; }
+
+  .badge {
+    font-family: var(--mono); font-size: 10px; padding: 3px 8px;
+    border-radius: 4px; border: 1px solid;
+  }
+  .badge-green { color: var(--accent2); border-color: rgba(74,222,128,0.3); background: rgba(74,222,128,0.06); }
+  .badge-purple { color: var(--accent); border-color: rgba(108,99,255,0.3); background: rgba(108,99,255,0.06); }
+  .badge-yellow { color: var(--accent3); border-color: rgba(245,158,11,0.3); background: rgba(245,158,11,0.06); }
+  .badge-red { color: var(--danger); border-color: rgba(239,68,68,0.3); background: rgba(239,68,68,0.06); }
+
+  .content { padding: 28px; }
+
+  /* ── Cards / Stats ──────────────── */
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px;
+  }
+
+  .stat-card {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px;
+    transition: border-color 0.2s;
+  }
+  .stat-card:hover { border-color: var(--border2); }
+
+  .stat-label { font-size: 11px; color: var(--text3); text-transform: uppercase;
+    letter-spacing: 1px; font-family: var(--mono); margin-bottom: 8px; }
+  .stat-value { font-size: 28px; font-weight: 600; font-family: var(--mono); line-height: 1; }
+  .stat-sub { font-size: 11px; color: var(--text3); margin-top: 6px; }
+  .stat-accent { color: var(--accent); }
+  .stat-green { color: var(--accent2); }
+  .stat-yellow { color: var(--accent3); }
+
+  /* ── Panels ─────────────────────── */
+  .panel {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 10px; margin-bottom: 20px;
+  }
+
+  .panel-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+
+  .panel-title { font-size: 14px; font-weight: 600; }
+  .panel-body { padding: 20px; }
+
+  /* ── Buttons ────────────────────── */
+  .btn {
+    padding: 8px 16px; border-radius: 6px; font-size: 13px;
+    cursor: pointer; border: none; font-family: var(--sans);
+    font-weight: 500; transition: all 0.15s; display: inline-flex;
+    align-items: center; gap: 6px;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #7c74ff; }
+  .btn-secondary { background: var(--bg3); color: var(--text2); border: 1px solid var(--border); }
+  .btn-secondary:hover { border-color: var(--border2); color: var(--text); }
+  .btn-danger { background: rgba(239,68,68,0.1); color: var(--danger); border: 1px solid rgba(239,68,68,0.2); }
+  .btn-danger:hover { background: rgba(239,68,68,0.2); }
+  .btn-sm { padding: 5px 10px; font-size: 12px; }
+
+  /* ── Table ──────────────────────── */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { padding: 10px 14px; text-align: left; font-size: 11px; color: var(--text3);
+    font-family: var(--mono); text-transform: uppercase; letter-spacing: 1px;
+    border-bottom: 1px solid var(--border); font-weight: 400; }
+  td { padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--text2); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--bg3); color: var(--text); }
+  .td-main { color: var(--text); font-weight: 500; }
+
+  /* ── Forms ──────────────────────── */
+  .form-group { margin-bottom: 18px; }
+  .form-label { display: block; font-size: 12px; color: var(--text2); margin-bottom: 6px; font-weight: 500; }
+  .form-input, .form-select, .form-textarea {
+    width: 100%; padding: 9px 12px;
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 6px; color: var(--text); font-size: 13px;
+    font-family: var(--sans); transition: border-color 0.15s; outline: none;
+  }
+  .form-input:focus, .form-select:focus, .form-textarea:focus {
+    border-color: var(--accent);
+  }
+  .form-select option { background: var(--bg2); }
+  .form-textarea { resize: vertical; min-height: 90px; }
+  .form-hint { font-size: 11px; color: var(--text3); margin-top: 4px; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  /* ── Modal ──────────────────────── */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7); z-index: 200;
+    align-items: center; justify-content: center;
+    backdrop-filter: blur(4px);
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--bg2); border: 1px solid var(--border2);
+    border-radius: 12px; width: 560px; max-width: 95vw;
+    max-height: 90vh; overflow-y: auto;
+    animation: modalIn 0.2s ease;
+  }
+  @keyframes modalIn { from { opacity:0; transform: scale(0.96) translateY(8px); } }
+  .modal-header {
+    padding: 20px 24px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .modal-title { font-size: 15px; font-weight: 600; }
+  .modal-body { padding: 24px; }
+  .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border);
+    display: flex; gap: 10px; justify-content: flex-end; }
+  .btn-close {
+    background: none; border: none; color: var(--text3);
+    cursor: pointer; font-size: 18px; line-height: 1; padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .btn-close:hover { color: var(--text); background: var(--bg3); }
+
+  /* ── Upload Zone ─────────────────── */
+  .upload-zone {
+    border: 2px dashed var(--border2); border-radius: 8px;
+    padding: 40px 20px; text-align: center; cursor: pointer;
+    transition: all 0.2s; color: var(--text2);
+  }
+  .upload-zone:hover, .upload-zone.drag-over {
+    border-color: var(--accent); background: rgba(108,99,255,0.06);
+    color: var(--text);
+  }
+  .upload-icon { font-size: 32px; margin-bottom: 10px; display: block; }
+  .upload-text { font-size: 14px; }
+  .upload-hint { font-size: 12px; color: var(--text3); margin-top: 4px; }
+
+  /* ── Progress ────────────────────── */
+  .progress { height: 4px; background: var(--bg3); border-radius: 2px; overflow: hidden; margin-top: 4px; }
+  .progress-bar { height: 100%; background: var(--accent); border-radius: 2px;
+    transition: width 0.3s; }
+
+  /* ── Tabs ───────────────────────── */
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+  .tab {
+    padding: 10px 18px; font-size: 13px; cursor: pointer;
+    color: var(--text3); border-bottom: 2px solid transparent;
+    transition: all 0.15s; font-weight: 500;
+  }
+  .tab:hover { color: var(--text2); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* ── Login Screen ───────────────── */
+  #login-screen {
+    position: fixed; inset: 0; background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 999;
+  }
+  .login-box {
+    width: 380px; background: var(--bg2);
+    border: 1px solid var(--border2); border-radius: 14px;
+    padding: 36px 32px;
+  }
+  .login-logo { text-align: center; margin-bottom: 28px; }
+  .login-logo .logo-icon { width: 48px; height: 48px; font-size: 22px; margin: 0 auto 10px; }
+  .login-title { font-size: 20px; font-weight: 600; }
+  .login-sub { font-size: 13px; color: var(--text3); margin-top: 4px; }
+  .login-error { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2);
+    color: var(--danger); border-radius: 6px; padding: 10px 14px; font-size: 13px;
+    margin-bottom: 16px; display: none; }
+
+  /* ── Code Block ─────────────────── */
+  .code-block {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 14px 16px;
+    font-family: var(--mono); font-size: 12px; color: var(--accent2);
+    overflow-x: auto; white-space: pre; margin-top: 8px;
+  }
+
+  /* ── Toast ──────────────────────── */
+  #toast-container { position: fixed; bottom: 24px; right: 24px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+  .toast {
+    background: var(--bg2); border: 1px solid var(--border2);
+    border-radius: 8px; padding: 12px 16px; font-size: 13px;
+    min-width: 260px; animation: toastIn 0.2s ease;
+    display: flex; align-items: center; gap: 10px;
+  }
+  @keyframes toastIn { from { opacity:0; transform: translateX(20px); } }
+  .toast-success { border-left: 3px solid var(--accent2); }
+  .toast-error { border-left: 3px solid var(--danger); }
+  .toast-info { border-left: 3px solid var(--accent); }
+
+  /* ── Misc ───────────────────────── */
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .dot-green { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+  .dot-yellow { background: var(--accent3); }
+  .dot-red { background: var(--danger); }
+  .flex { display: flex; }
+  .gap-8 { gap: 8px; }
+  .items-center { align-items: center; }
+  .text-mono { font-family: var(--mono); }
+  .text-sm { font-size: 12px; }
+  .text-muted { color: var(--text3); }
+  .mb-4 { margin-bottom: 4px; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+  /* Page sections */
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    .sidebar { transform: translateX(-100%); transition: transform 0.2s; }
+    .sidebar.open { transform: translateX(0); }
+    .main { margin-left: 0; }
+    .stats-grid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ── LOGIN SCREEN ───────────────────────────────────────── -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-logo">
+      <div class="logo-icon">🤖</div>
+      <div class="login-title">RAGBot</div>
+      <div class="login-sub">Dashboard de Administración</div>
+    </div>
+    <div class="login-error" id="login-error">Credenciales inválidas</div>
+    <div class="form-group">
+      <label class="form-label">Usuario</label>
+      <input class="form-input" id="login-user" type="text" placeholder="username" autocomplete="username">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Contraseña</label>
+      <input class="form-input" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <button class="btn btn-primary" style="width:100%;justify-content:center;padding:11px" onclick="doLogin()">
+      Iniciar Sesión
+    </button>
+  </div>
+</div>
+
+<!-- ── SIDEBAR ────────────────────────────────────────────── -->
+<div class="sidebar" id="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">🤖</div>
+    <div>
+      <div class="logo-text">RAGBOT</div>
+      <div class="logo-ver">v1.0.0</div>
+    </div>
+  </div>
+  <nav class="nav">
+    <div class="nav-section">Principal</div>
+    <div class="nav-item active" onclick="showPage('dashboard')">
+      <span class="icon">📊</span> Dashboard
+    </div>
+    <div class="nav-item" onclick="showPage('chatbots')">
+      <span class="icon">🤖</span> Chatbots
+    </div>
+    <div class="nav-section">Conversaciones</div>
+    <div class="nav-item" onclick="showPage('conversations')">
+      <span class="icon">💬</span> Conversaciones
+    </div>
+    <div class="nav-section" id="nav-admin-section">Admin</div>
+    <div class="nav-item" onclick="showPage('users')" id="nav-users">
+      <span class="icon">👥</span> Usuarios
+    </div>
+    <div class="nav-section">Sistema</div>
+    <div class="nav-item" onclick="showPage('settings')">
+      <span class="icon">⚙️</span> Configuración
+    </div>
+  </nav>
+  <div class="sidebar-footer">
+    <div class="user-info">
+      <div class="user-avatar" id="user-avatar">U</div>
+      <div>
+        <div class="user-name" id="user-display">-</div>
+        <div class="user-role" id="user-role-display">-</div>
+      </div>
+    </div>
+    <button class="btn-logout" onclick="doLogout()">Cerrar Sesión</button>
+  </div>
+</div>
+
+<!-- ── MAIN ───────────────────────────────────────────────── -->
+<div class="main">
+  <div class="topbar">
+    <div class="page-title" id="page-title">Dashboard</div>
+    <div class="topbar-right">
+      <span class="badge badge-green"><span class="dot dot-green"></span> API Online</span>
+      <span class="badge badge-purple" id="api-version">v1.0.0</span>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- ══ PAGE: DASHBOARD ════════════════════════════════ -->
+    <div class="page active" id="page-dashboard">
+      <div class="stats-grid" id="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Chatbots</div>
+          <div class="stat-value stat-accent" id="stat-bots">-</div>
+          <div class="stat-sub">activos en sistema</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Documentos</div>
+          <div class="stat-value" id="stat-docs">-</div>
+          <div class="stat-sub">procesados con RAG</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Conversaciones</div>
+          <div class="stat-value stat-green" id="stat-convs">-</div>
+          <div class="stat-sub">total registradas</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Tokens Usados</div>
+          <div class="stat-value stat-yellow" id="stat-tokens">-</div>
+          <div class="stat-sub">acumulado total</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">Chatbots Recientes</span>
+          <button class="btn btn-primary btn-sm" onclick="showPage('chatbots')">Ver todos</button>
+        </div>
+        <div class="panel-body" style="padding:0">
+          <table>
+            <thead><tr>
+              <th>Nombre</th><th>Proveedor</th><th>Conversaciones</th><th>Tokens</th><th>Estado</th>
+            </tr></thead>
+            <tbody id="recent-bots-table">
+              <tr><td colspan="5" style="text-align:center;color:var(--text3);padding:24px">Cargando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ PAGE: CHATBOTS ═════════════════════════════════ -->
+    <div class="page" id="page-chatbots">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <div>
+          <div style="font-size:13px;color:var(--text3)">Gestiona todos tus asistentes conversacionales</div>
+        </div>
+        <button class="btn btn-primary" onclick="openCreateBotModal()">+ Nuevo Chatbot</button>
+      </div>
+
+      <div id="bots-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">
+        <div style="text-align:center;color:var(--text3);padding:48px;grid-column:1/-1">Cargando chatbots...</div>
+      </div>
+    </div>
+
+    <!-- ══ PAGE: BOT DETAIL ════════════════════════════════ -->
+    <div class="page" id="page-bot-detail">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px">
+        <button class="btn btn-secondary btn-sm" onclick="showPage('chatbots')">← Volver</button>
+        <h2 style="font-size:16px" id="bot-detail-name">-</h2>
+        <span class="badge badge-green" id="bot-detail-status">activo</span>
+      </div>
+
+      <div class="tabs">
+        <div class="tab active" onclick="switchBotTab('documents', this)">📄 Documentos</div>
+        <div class="tab" onclick="switchBotTab('config', this)">⚙️ Configuración</div>
+        <div class="tab" onclick="switchBotTab('embed', this)">🔗 Embed</div>
+        <div class="tab" onclick="switchBotTab('stats', this)">📈 Estadísticas</div>
+      </div>
+
+      <!-- Tab: Documents -->
+      <div id="bot-tab-documents">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
+          <button class="btn btn-primary btn-sm" onclick="openUploadModal()">+ Subir Documento</button>
+        </div>
+        <div class="panel">
+          <div class="panel-body" style="padding:0">
+            <table>
+              <thead><tr>
+                <th>Archivo</th><th>Estado</th><th>Chunks</th><th>Páginas</th><th>Tamaño</th><th>Acciones</th>
+              </tr></thead>
+              <tbody id="docs-table">
+                <tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Sin documentos</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Config -->
+      <div id="bot-tab-config" style="display:none">
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Personalidad del Bot</span></div>
+          <div class="panel-body">
+            <div class="form-group">
+              <label class="form-label">Nombre del Bot</label>
+              <input class="form-input" id="cfg-bot-name" placeholder="Asistente">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Mensaje de Bienvenida</label>
+              <input class="form-input" id="cfg-welcome" placeholder="¡Hola! ¿En qué puedo ayudarte?">
+            </div>
+            <div class="form-group">
+              <label class="form-label">System Prompt (Personalidad)</label>
+              <textarea class="form-textarea" id="cfg-system-prompt" placeholder="Eres un asistente especializado en... Responde siempre en español. Sé conciso y profesional."></textarea>
+              <div class="form-hint">Define la personalidad, tono y restricciones del bot</div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Modelo de IA</span></div>
+          <div class="panel-body">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Proveedor</label>
+                <select class="form-select" id="cfg-provider" onchange="updateModelOptions()">
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="google">Google</option>
+                  <option value="ollama">Ollama (Local)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Modelo</label>
+                <select class="form-select" id="cfg-model"></select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Temperatura: <span id="temp-val">0.7</span></label>
+                <input type="range" min="0" max="1" step="0.1" value="0.7" id="cfg-temperature"
+                  oninput="document.getElementById('temp-val').textContent=this.value"
+                  style="width:100%;accent-color:var(--accent);margin-top:6px">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Max Tokens</label>
+                <input class="form-input" id="cfg-max-tokens" type="number" value="1000" min="100" max="4000">
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Configuración RAG</span></div>
+          <div class="panel-body">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Top K (resultados)</label>
+                <input class="form-input" id="cfg-top-k" type="number" value="5" min="1" max="20">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Umbral de Similitud</label>
+                <input class="form-input" id="cfg-threshold" type="number" value="0.7" min="0.1" max="1" step="0.05">
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-primary" onclick="saveBotConfig()">💾 Guardar Configuración</button>
+          <button class="btn btn-secondary" onclick="testBotConfig()">🧪 Probar Bot</button>
+        </div>
+      </div>
+
+      <!-- Tab: Embed -->
+      <div id="bot-tab-embed" style="display:none">
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Código de Embed</span></div>
+          <div class="panel-body">
+            <p style="font-size:13px;color:var(--text2);margin-bottom:16px">
+              Copia este código en cualquier sitio web para embeber el chatbot como widget flotante.
+            </p>
+
+            <div class="form-group">
+              <label class="form-label">Opción 1: Script Automático (recomendado)</label>
+              <div class="code-block" id="embed-script-1"><!-- cargando... --></div>
+              <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="copyEmbed('embed-script-1')">📋 Copiar</button>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Opción 2: iFrame</label>
+              <div class="code-block" id="embed-script-2"><!-- cargando... --></div>
+              <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="copyEmbed('embed-script-2')">📋 Copiar</button>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Opción 3: Página completa de chat</label>
+              <a id="embed-fullpage" href="#" target="_blank" class="btn btn-secondary btn-sm">🔗 Abrir en nueva pestaña</a>
+            </div>
+
+            <div style="margin-top:20px">
+              <label class="form-label">Color Primario del Widget</label>
+              <div style="display:flex;gap:10px;align-items:center">
+                <input type="color" value="#6c63ff" id="widget-color" style="width:40px;height:32px;border:none;border-radius:4px;cursor:pointer">
+                <span style="font-size:13px;color:var(--text2)">Personaliza el color del botón flotante</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Stats -->
+      <div id="bot-tab-stats" style="display:none">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">Conversaciones</div>
+            <div class="stat-value stat-accent" id="bot-stat-convs">-</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Mensajes</div>
+            <div class="stat-value" id="bot-stat-msgs">-</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Tokens Usados</div>
+            <div class="stat-value stat-yellow" id="bot-stat-tokens">-</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Costo Estimado</div>
+            <div class="stat-value stat-green" id="bot-stat-cost">-</div>
+            <div class="stat-sub">USD aprox.</div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Conversaciones Recientes</span></div>
+          <div class="panel-body" style="padding:0">
+            <table>
+              <thead><tr>
+                <th>Session</th><th>Mensajes</th><th>Tokens</th><th>Inicio</th><th>Acción</th>
+              </tr></thead>
+              <tbody id="bot-convs-table">
+                <tr><td colspan="5" style="text-align:center;color:var(--text3);padding:24px">Sin conversaciones</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ PAGE: CONVERSATIONS ════════════════════════════ -->
+    <div class="page" id="page-conversations">
+      <div class="panel">
+        <div class="panel-body" style="padding:0">
+          <table>
+            <thead><tr><th>Bot</th><th>Session</th><th>Mensajes</th><th>Tokens</th><th>Inicio</th><th>Ver</th></tr></thead>
+            <tbody id="all-convs-table">
+              <tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Cargando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ PAGE: USERS ════════════════════════════════════ -->
+    <div class="page" id="page-users">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
+        <button class="btn btn-primary" onclick="openCreateUserModal()">+ Nuevo Usuario</button>
+      </div>
+      <div class="panel">
+        <div class="panel-body" style="padding:0">
+          <table>
+            <thead><tr><th>Usuario</th><th>Email</th><th>Rol</th><th>Estado</th><th>Último acceso</th><th>Acciones</th></tr></thead>
+            <tbody id="users-table">
+              <tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Cargando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ PAGE: SETTINGS ════════════════════════════════ -->
+    <div class="page" id="page-settings">
+      <div class="panel">
+        <div class="panel-header"><span class="panel-title">API Endpoint</span></div>
+        <div class="panel-body">
+          <div class="form-group">
+            <label class="form-label">URL del Backend</label>
+            <input class="form-input" id="settings-api-url" placeholder="http://localhost:8000">
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="saveSettings()">Guardar</button>
+          <button class="btn btn-secondary btn-sm" style="margin-left:8px" onclick="testConnection()">🔌 Probar Conexión</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /main -->
+
+<!-- ══ MODAL: CREAR BOT ════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-create-bot">
+  <div class="modal">
+    <div class="modal-header">
+      <span class="modal-title">Nuevo Chatbot</span>
+      <button class="btn-close" onclick="closeModal('modal-create-bot')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Nombre *</label>
+        <input class="form-input" id="new-bot-name" placeholder="Mi Asistente de Ventas">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Descripción</label>
+        <input class="form-input" id="new-bot-desc" placeholder="Descripción breve...">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Proveedor IA</label>
+          <select class="form-select" id="new-bot-provider" onchange="updateNewModelOptions()">
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="google">Google</option>
+            <option value="ollama">Ollama (Local)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Modelo</label>
+          <select class="form-select" id="new-bot-model"></select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Nombre visible del Bot</label>
+        <input class="form-input" id="new-bot-botname" placeholder="Asistente" value="Asistente">
+      </div>
+      <div class="form-group">
+        <label class="form-label">System Prompt (Personalidad)</label>
+        <textarea class="form-textarea" id="new-bot-prompt" placeholder="Eres un asistente útil y amable..."></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-create-bot')">Cancelar</button>
+      <button class="btn btn-primary" onclick="createBot()">Crear Chatbot</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL: UPLOAD DOC ═══════════════════════════════════ -->
+<div class="modal-overlay" id="modal-upload">
+  <div class="modal" style="width:440px">
+    <div class="modal-header">
+      <span class="modal-title">Subir Documento</span>
+      <button class="btn-close" onclick="closeModal('modal-upload')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()">
+        <span class="upload-icon">📄</span>
+        <div class="upload-text">Arrastra o haz clic para subir</div>
+        <div class="upload-hint">PDF, DOCX, TXT — máx 50MB</div>
+      </div>
+      <input type="file" id="file-input" style="display:none" accept=".pdf,.docx,.txt" onchange="handleFileSelect(this)">
+      <div id="upload-progress" style="display:none;margin-top:16px">
+        <div style="font-size:13px;margin-bottom:6px" id="upload-filename"></div>
+        <div class="progress"><div class="progress-bar" id="progress-bar" style="width:0%"></div></div>
+        <div class="form-hint" id="upload-status">Subiendo...</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-upload')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL: CREATE USER ══════════════════════════════════ -->
+<div class="modal-overlay" id="modal-create-user">
+  <div class="modal" style="width:440px">
+    <div class="modal-header">
+      <span class="modal-title">Nuevo Usuario</span>
+      <button class="btn-close" onclick="closeModal('modal-create-user')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Username *</label>
+          <input class="form-input" id="nu-username" placeholder="john_doe">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email *</label>
+          <input class="form-input" id="nu-email" type="email" placeholder="john@empresa.com">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Nombre Completo</label>
+        <input class="form-input" id="nu-fullname" placeholder="John Doe">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Contraseña *</label>
+          <input class="form-input" id="nu-password" type="password">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Rol</label>
+          <select class="form-select" id="nu-role">
+            <option value="viewer">Viewer</option>
+            <option value="operator">Operator</option>
+            <option value="admin">Admin</option>
+            <option value="superadmin">SuperAdmin</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-create-user')">Cancelar</button>
+      <button class="btn btn-primary" onclick="createUser()">Crear Usuario</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MODAL: CONVERSATION VIEWER ═════════════════════════ -->
+<div class="modal-overlay" id="modal-conversation">
+  <div class="modal" style="width:620px">
+    <div class="modal-header">
+      <span class="modal-title">Conversación</span>
+      <button class="btn-close" onclick="closeModal('modal-conversation')">×</button>
+    </div>
+    <div class="modal-body" id="conv-messages" style="max-height:480px;overflow-y:auto;display:flex;flex-direction:column;gap:12px">
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div id="toast-container"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// CONFIG & STATE
+// ═══════════════════════════════════════════════════════════════
+let API_URL = localStorage.getItem('ragbot_api_url') || 'http://localhost:8000';
+let token = localStorage.getItem('ragbot_token');
+let currentUser = null;
+let currentBotId = null;
+
+const MODELS = {
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+  anthropic: ['claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307', 'claude-3-opus-20240229'],
+  google: ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-1.0-pro'],
+  ollama: ['llama3', 'llama3:70b', 'mistral', 'mixtral', 'codellama'],
+};
+
+// ═══════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('settings-api-url').value = API_URL;
+  updateModelOptions('new-bot-provider', 'new-bot-model');
+  updateModelOptions('cfg-provider', 'cfg-model');
+  if (token) initDashboard();
+});
+
+async function initDashboard() {
+  try {
+    const me = await api('/api/v1/auth/me');
+    currentUser = me;
+    document.getElementById('user-display').textContent = me.username;
+    document.getElementById('user-role-display').textContent = me.role;
+    document.getElementById('user-avatar').textContent = me.username[0].toUpperCase();
+
+    // Ocultar admin section si no tiene rol
+    if (!['superadmin', 'admin'].includes(me.role)) {
+      document.getElementById('nav-admin-section').style.display = 'none';
+      document.getElementById('nav-users').style.display = 'none';
+    }
+
+    document.getElementById('login-screen').style.display = 'none';
+    loadDashboardStats();
+  } catch {
+    localStorage.removeItem('ragbot_token');
+    token = null;
+    document.getElementById('login-screen').style.display = 'flex';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════════════════════════════
+async function doLogin() {
+  const username = document.getElementById('login-user').value.trim();
+  const password = document.getElementById('login-pass').value;
+  if (!username || !password) return;
+
+  try {
+    const data = await api('/api/v1/auth/login', 'POST', { username, password }, false);
+    token = data.access_token;
+    localStorage.setItem('ragbot_token', token);
+    document.getElementById('login-error').style.display = 'none';
+    await initDashboard();
+  } catch {
+    document.getElementById('login-error').style.display = 'block';
+  }
+}
+
+function doLogout() {
+  localStorage.removeItem('ragbot_token');
+  token = null;
+  currentUser = null;
+  document.getElementById('login-screen').style.display = 'flex';
+}
+
+// Enter para login
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && document.getElementById('login-screen').style.display !== 'none') doLogin();
+});
+
+// ═══════════════════════════════════════════════════════════════
+// API HELPER
+// ═══════════════════════════════════════════════════════════════
+async function api(path, method = 'GET', body = null, auth = true) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (auth && token) headers['Authorization'] = `Bearer ${token}`;
+
+  const opts = { method, headers };
+  if (body) opts.body = JSON.stringify(body);
+
+  const res = await fetch(`${API_URL}${path}`, opts);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Error' }));
+    throw new Error(err.detail || 'Error');
+  }
+  return res.json();
+}
+
+async function apiUpload(path, formData) {
+  const headers = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: formData });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Upload error');
+  return res.json();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════════════
+const PAGE_TITLES = {
+  dashboard: 'Dashboard', chatbots: 'Chatbots', 'bot-detail': 'Detalle del Bot',
+  conversations: 'Conversaciones', users: 'Usuarios', settings: 'Configuración'
+};
+
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById(`page-${name}`)?.classList.add('active');
+  document.getElementById('page-title').textContent = PAGE_TITLES[name] || name;
+
+  document.querySelectorAll('.nav-item').forEach(n => {
+    if (n.getAttribute('onclick')?.includes(`'${name}'`)) n.classList.add('active');
+  });
+
+  if (name === 'dashboard') loadDashboardStats();
+  else if (name === 'chatbots') loadChatbots();
+  else if (name === 'conversations') loadAllConversations();
+  else if (name === 'users') loadUsers();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════════════
+async function loadDashboardStats() {
+  try {
+    const stats = await api('/api/v1/analytics/dashboard');
+    document.getElementById('stat-bots').textContent = stats.chatbots ?? '-';
+    document.getElementById('stat-docs').textContent = stats.documents_ready ?? '-';
+    document.getElementById('stat-convs').textContent = stats.conversations ?? '-';
+    document.getElementById('stat-tokens').textContent = formatNum(stats.total_tokens_used ?? 0);
+
+    const bots = await api('/api/v1/chatbots/');
+    const tbody = document.getElementById('recent-bots-table');
+    tbody.innerHTML = bots.slice(0, 5).map(b => `
+      <tr>
+        <td class="td-main">${b.name}</td>
+        <td><span class="badge badge-purple">${b.ai_provider}</span></td>
+        <td>${b.total_conversations}</td>
+        <td class="text-mono">${formatNum(b.total_tokens_used)}</td>
+        <td><span class="dot ${b.is_active ? 'dot-green' : 'dot-red'}"></span></td>
+      </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px">Sin chatbots</td></tr>';
+  } catch(e) { toast('Error cargando estadísticas', 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CHATBOTS
+// ═══════════════════════════════════════════════════════════════
+async function loadChatbots() {
+  const grid = document.getElementById('bots-grid');
+  try {
+    const bots = await api('/api/v1/chatbots/');
+    if (!bots.length) {
+      grid.innerHTML = `<div style="text-align:center;color:var(--text3);padding:60px;grid-column:1/-1">
+        <div style="font-size:40px;margin-bottom:12px">🤖</div>
+        <div>No tienes chatbots aún</div>
+        <button class="btn btn-primary" style="margin-top:16px" onclick="openCreateBotModal()">Crear primer chatbot</button>
+      </div>`;
+      return;
+    }
+    grid.innerHTML = bots.map(b => `
+      <div class="panel" style="cursor:pointer;transition:border-color 0.2s" onmouseenter="this.style.borderColor='var(--border2)'" onmouseleave="this.style.borderColor='var(--border)'">
+        <div class="panel-header">
+          <div>
+            <div style="font-size:15px;font-weight:600">${b.name}</div>
+            <div style="font-size:12px;color:var(--text3);margin-top:2px">${b.slug}</div>
+          </div>
+          <span class="dot ${b.is_active ? 'dot-green' : 'dot-red'}"></span>
+        </div>
+        <div class="panel-body">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+            <div>
+              <div class="stat-label">Proveedor</div>
+              <div style="font-size:13px"><span class="badge badge-purple">${b.ai_provider}/${b.ai_model}</span></div>
+            </div>
+            <div>
+              <div class="stat-label">Conversaciones</div>
+              <div style="font-size:18px;font-weight:600;font-family:var(--mono)">${b.total_conversations}</div>
+            </div>
+            <div>
+              <div class="stat-label">Tokens</div>
+              <div style="font-size:13px;font-family:var(--mono)">${formatNum(b.total_tokens_used)}</div>
+            </div>
+            <div>
+              <div class="stat-label">Mensajes</div>
+              <div style="font-size:13px;font-family:var(--mono)">${b.total_messages}</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary btn-sm" onclick="openBotDetail('${b.id}','${b.name}')">Gestionar</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteBot(event,'${b.id}')">🗑</button>
+          </div>
+        </div>
+      </div>`).join('');
+  } catch(e) { grid.innerHTML = `<div style="color:var(--danger);grid-column:1/-1">Error: ${e.message}</div>`; }
+}
+
+async function openBotDetail(botId, botName) {
+  currentBotId = botId;
+  document.getElementById('bot-detail-name').textContent = botName;
+  showPage('bot-detail');
+  loadBotDocuments();
+  loadBotConfig(botId);
+  updateEmbedCodes(botId);
+  loadBotStats(botId);
+}
+
+function openCreateBotModal() {
+  updateModelOptions('new-bot-provider', 'new-bot-model');
+  document.getElementById('modal-create-bot').classList.add('open');
+}
+
+async function createBot() {
+  const data = {
+    name: document.getElementById('new-bot-name').value.trim(),
+    description: document.getElementById('new-bot-desc').value.trim(),
+    ai_provider: document.getElementById('new-bot-provider').value,
+    ai_model: document.getElementById('new-bot-model').value,
+    bot_name: document.getElementById('new-bot-botname').value.trim() || 'Asistente',
+    system_prompt: document.getElementById('new-bot-prompt').value.trim(),
+  };
+  if (!data.name) { toast('El nombre es requerido', 'error'); return; }
+  try {
+    await api('/api/v1/chatbots/', 'POST', data);
+    closeModal('modal-create-bot');
+    toast('Chatbot creado exitosamente', 'success');
+    loadChatbots();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteBot(event, botId) {
+  event.stopPropagation();
+  if (!confirm('¿Eliminar este chatbot y todos sus documentos?')) return;
+  try {
+    await api(`/api/v1/chatbots/${botId}`, 'DELETE');
+    toast('Chatbot eliminado', 'success');
+    loadChatbots();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DOCUMENTS
+// ═══════════════════════════════════════════════════════════════
+async function loadBotDocuments() {
+  if (!currentBotId) return;
+  const tbody = document.getElementById('docs-table');
+  try {
+    const docs = await api(`/api/v1/chatbots/${currentBotId}/documents/`);
+    if (!docs.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Sin documentos — sube el primero</td></tr>';
+      return;
+    }
+    tbody.innerHTML = docs.map(d => `
+      <tr>
+        <td class="td-main">${d.filename}</td>
+        <td>${statusBadge(d.status)}</td>
+        <td class="text-mono">${d.chunk_count}</td>
+        <td class="text-mono">${d.page_count}</td>
+        <td class="text-mono">${formatBytes(d.file_size)}</td>
+        <td>
+          <button class="btn btn-danger btn-sm" onclick="deleteDoc('${d.id}')">🗑</button>
+          ${d.status === 'error' ? `<span style="font-size:11px;color:var(--danger)" title="${d.error_message}">⚠</span>` : ''}
+        </td>
+      </tr>`).join('');
+  } catch(e) { tbody.innerHTML = `<tr><td colspan="6" style="color:var(--danger)">Error: ${e.message}</td></tr>`; }
+}
+
+function openUploadModal() {
+  document.getElementById('upload-progress').style.display = 'none';
+  document.getElementById('modal-upload').classList.add('open');
+}
+
+async function handleFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  await uploadFile(file);
+}
+
+const uploadZone = document.getElementById('upload-zone');
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault(); uploadZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) uploadFile(file);
+});
+
+async function uploadFile(file) {
+  const prog = document.getElementById('upload-progress');
+  const bar = document.getElementById('progress-bar');
+  const status = document.getElementById('upload-status');
+  document.getElementById('upload-filename').textContent = file.name;
+  prog.style.display = 'block';
+  bar.style.width = '30%';
+  status.textContent = 'Subiendo...';
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    bar.style.width = '60%';
+    await apiUpload(`/api/v1/chatbots/${currentBotId}/documents/`, formData);
+    bar.style.width = '100%';
+    status.textContent = '✅ Subido — procesando RAG en background...';
+    toast('Documento subido. Procesando embeddings...', 'info');
+    setTimeout(() => { loadBotDocuments(); }, 3000);
+  } catch(e) {
+    status.textContent = `❌ Error: ${e.message}`;
+    bar.style.background = 'var(--danger)';
+    toast(e.message, 'error');
+  }
+}
+
+async function deleteDoc(docId) {
+  if (!confirm('¿Eliminar este documento y sus embeddings?')) return;
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}/documents/${docId}`, 'DELETE');
+    toast('Documento eliminado', 'success');
+    loadBotDocuments();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BOT CONFIG
+// ═══════════════════════════════════════════════════════════════
+async function loadBotConfig(botId) {
+  try {
+    const bot = await api(`/api/v1/chatbots/${botId}`);
+    document.getElementById('cfg-bot-name').value = bot.bot_name || '';
+    document.getElementById('cfg-welcome').value = bot.welcome_message || '';
+    document.getElementById('cfg-system-prompt').value = bot.system_prompt || '';
+    document.getElementById('cfg-provider').value = bot.ai_provider || 'openai';
+    updateModelOptions('cfg-provider', 'cfg-model');
+    document.getElementById('cfg-model').value = bot.ai_model || '';
+    document.getElementById('cfg-temperature').value = bot.temperature || 0.7;
+    document.getElementById('temp-val').textContent = bot.temperature || 0.7;
+    document.getElementById('cfg-max-tokens').value = bot.max_tokens || 1000;
+    document.getElementById('cfg-top-k').value = bot.top_k || 5;
+    document.getElementById('cfg-threshold').value = bot.similarity_threshold || 0.7;
+  } catch(e) { toast('Error cargando config: ' + e.message, 'error'); }
+}
+
+async function saveBotConfig() {
+  const data = {
+    bot_name: document.getElementById('cfg-bot-name').value,
+    welcome_message: document.getElementById('cfg-welcome').value,
+    system_prompt: document.getElementById('cfg-system-prompt').value,
+    ai_provider: document.getElementById('cfg-provider').value,
+    ai_model: document.getElementById('cfg-model').value,
+    temperature: parseFloat(document.getElementById('cfg-temperature').value),
+    max_tokens: parseInt(document.getElementById('cfg-max-tokens').value),
+    top_k: parseInt(document.getElementById('cfg-top-k').value),
+    similarity_threshold: parseFloat(document.getElementById('cfg-threshold').value),
+  };
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}`, 'PATCH', data);
+    toast('Configuración guardada', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// EMBED CODES
+// ═══════════════════════════════════════════════════════════════
+function updateEmbedCodes(botId) {
+  const script1 = `<script>
+  window.RAGBOT_API_URL = "${API_URL}";
+<\/script>
+<script src="${API_URL}/api/v1/chatbots/${botId}/widget.js"><\/script>`;
+
+  const script2 = `<iframe
+  src="${API_URL}/chat/${botId}"
+  width="400" height="600"
+  style="border:none;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,0.2)"
+  allow="clipboard-write">
+</iframe>`;
+
+  document.getElementById('embed-script-1').textContent = script1;
+  document.getElementById('embed-script-2').textContent = script2;
+  document.getElementById('embed-fullpage').href = `${API_URL}/chat/${botId}`;
+}
+
+function copyEmbed(elementId) {
+  const text = document.getElementById(elementId).textContent;
+  navigator.clipboard.writeText(text).then(() => toast('Copiado al portapapeles', 'success'));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BOT STATS
+// ═══════════════════════════════════════════════════════════════
+async function loadBotStats(botId) {
+  try {
+    const bot = await api(`/api/v1/chatbots/${botId}`);
+    document.getElementById('bot-stat-convs').textContent = bot.total_conversations ?? '-';
+    document.getElementById('bot-stat-msgs').textContent = bot.total_messages ?? '-';
+    document.getElementById('bot-stat-tokens').textContent = formatNum(bot.total_tokens_used ?? 0);
+    // Costo estimado (OpenAI gpt-4o-mini ~$0.15/1M tokens)
+    const costUSD = ((bot.total_tokens_used || 0) / 1000000 * 0.15).toFixed(4);
+    document.getElementById('bot-stat-cost').textContent = `$${costUSD}`;
+
+    const convs = await api(`/api/v1/analytics/conversations/${botId}`);
+    const tbody = document.getElementById('bot-convs-table');
+    tbody.innerHTML = convs.slice(0, 20).map(c => `
+      <tr>
+        <td class="text-mono text-sm">${c.session_id.slice(0,16)}...</td>
+        <td>${c.total_messages}</td>
+        <td class="text-mono">${formatNum(c.total_tokens)}</td>
+        <td class="text-sm">${new Date(c.started_at).toLocaleString('es')}</td>
+        <td><button class="btn btn-secondary btn-sm" onclick="viewConversation('${c.id}')">Ver</button></td>
+      </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px">Sin conversaciones</td></tr>';
+  } catch(e) { console.error(e); }
+}
+
+async function viewConversation(convId) {
+  try {
+    const msgs = await api(`/api/v1/analytics/conversations/${convId}/messages`);
+    const container = document.getElementById('conv-messages');
+    container.innerHTML = msgs.map(m => `
+      <div style="display:flex;gap:10px;align-items:flex-start;${m.role === 'assistant' ? '' : 'flex-direction:row-reverse'}">
+        <div style="width:28px;height:28px;border-radius:50%;background:${m.role === 'user' ? 'var(--bg3)' : 'var(--accent)'};
+          display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0">
+          ${m.role === 'user' ? '👤' : '🤖'}
+        </div>
+        <div style="max-width:80%;background:var(--bg3);border-radius:10px;padding:10px 14px;${m.role === 'user' ? 'background:rgba(108,99,255,0.1)' : ''}">
+          <div style="font-size:13px;line-height:1.5">${m.content}</div>
+          ${m.total_tokens ? `<div style="font-size:10px;color:var(--text3);margin-top:4px;font-family:var(--mono)">${m.total_tokens} tokens · ${m.latency_ms}ms · ${m.model_used}</div>` : ''}
+        </div>
+      </div>`).join('');
+    document.getElementById('modal-conversation').classList.add('open');
+  } catch(e) { toast('Error cargando conversación', 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CONVERSATIONS (global)
+// ═══════════════════════════════════════════════════════════════
+async function loadAllConversations() {
+  const tbody = document.getElementById('all-convs-table');
+  try {
+    const bots = await api('/api/v1/chatbots/');
+    let allConvs = [];
+    for (const bot of bots.slice(0, 10)) {
+      try {
+        const convs = await api(`/api/v1/analytics/conversations/${bot.id}?limit=20`);
+        convs.forEach(c => { c._botName = bot.name; c._botId = bot.id; });
+        allConvs = allConvs.concat(convs);
+      } catch {}
+    }
+    allConvs.sort((a,b) => new Date(b.started_at) - new Date(a.started_at));
+    tbody.innerHTML = allConvs.slice(0, 50).map(c => `
+      <tr>
+        <td class="td-main">${c._botName}</td>
+        <td class="text-mono text-sm">${c.session_id.slice(0,20)}...</td>
+        <td>${c.total_messages}</td>
+        <td class="text-mono">${formatNum(c.total_tokens)}</td>
+        <td class="text-sm">${new Date(c.started_at).toLocaleString('es')}</td>
+        <td><button class="btn btn-secondary btn-sm" onclick="viewConversation('${c.id}')">👁 Ver</button></td>
+      </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Sin conversaciones</td></tr>';
+  } catch(e) { tbody.innerHTML = `<tr><td colspan="6" style="color:var(--danger)">Error: ${e.message}</td></tr>`; }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// USERS
+// ═══════════════════════════════════════════════════════════════
+async function loadUsers() {
+  const tbody = document.getElementById('users-table');
+  try {
+    const users = await api('/api/v1/users/');
+    tbody.innerHTML = users.map(u => `
+      <tr>
+        <td class="td-main">${u.username}</td>
+        <td>${u.email}</td>
+        <td>${roleBadge(u.role)}</td>
+        <td><span class="dot ${u.is_active ? 'dot-green' : 'dot-red'}"></span> ${u.is_active ? 'Activo' : 'Inactivo'}</td>
+        <td class="text-sm text-muted">-</td>
+        <td>
+          <button class="btn btn-secondary btn-sm" onclick="toggleUser('${u.id}', ${u.is_active})">
+            ${u.is_active ? 'Desactivar' : 'Activar'}
+          </button>
+        </td>
+      </tr>`).join('');
+  } catch(e) { tbody.innerHTML = `<tr><td colspan="6" style="color:var(--danger)">Sin acceso</td></tr>`; }
+}
+
+function openCreateUserModal() {
+  document.getElementById('modal-create-user').classList.add('open');
+}
+
+async function createUser() {
+  const data = {
+    username: document.getElementById('nu-username').value.trim(),
+    email: document.getElementById('nu-email').value.trim(),
+    password: document.getElementById('nu-password').value,
+    full_name: document.getElementById('nu-fullname').value.trim(),
+    role: document.getElementById('nu-role').value,
+  };
+  if (!data.username || !data.email || !data.password) { toast('Completa todos los campos requeridos', 'error'); return; }
+  try {
+    await api('/api/v1/users/', 'POST', data);
+    closeModal('modal-create-user');
+    toast('Usuario creado', 'success');
+    loadUsers();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function toggleUser(userId, currentActive) {
+  try {
+    await api(`/api/v1/users/${userId}`, 'PATCH', { is_active: !currentActive });
+    toast(`Usuario ${currentActive ? 'desactivado' : 'activado'}`, 'success');
+    loadUsers();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SETTINGS
+// ═══════════════════════════════════════════════════════════════
+function saveSettings() {
+  API_URL = document.getElementById('settings-api-url').value.trim().replace(/\/$/, '');
+  localStorage.setItem('ragbot_api_url', API_URL);
+  toast('Configuración guardada', 'success');
+}
+
+async function testConnection() {
+  try {
+    const data = await fetch(`${API_URL}/health`).then(r => r.json());
+    toast(`Conectado ✅ — ${data.name} v${data.version}`, 'success');
+  } catch { toast('No se pudo conectar al backend', 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BOT TABS
+// ═══════════════════════════════════════════════════════════════
+function switchBotTab(name, el) {
+  document.querySelectorAll('#page-bot-detail [id^="bot-tab-"]').forEach(t => t.style.display = 'none');
+  document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
+  document.getElementById(`bot-tab-${name}`).style.display = 'block';
+  el.classList.add('active');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// UTILS
+// ═══════════════════════════════════════════════════════════════
+function updateModelOptions(providerId = 'cfg-provider', modelId = 'cfg-model') {
+  const pv = document.getElementById(providerId)?.value || 'openai';
+  const modelSel = document.getElementById(modelId);
+  if (!modelSel) return;
+  modelSel.innerHTML = MODELS[pv].map(m => `<option value="${m}">${m}</option>`).join('');
+}
+
+function updateNewModelOptions() { updateModelOptions('new-bot-provider', 'new-bot-model'); }
+
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.innerHTML = `<span>${type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️'}</span> ${msg}`;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+function formatNum(n) {
+  if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n/1000).toFixed(1) + 'K';
+  return n?.toString() || '0';
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return '0 B';
+  if (bytes > 1048576) return (bytes/1048576).toFixed(1) + ' MB';
+  if (bytes > 1024) return (bytes/1024).toFixed(1) + ' KB';
+  return bytes + ' B';
+}
+
+function statusBadge(status) {
+  const map = {
+    ready: '<span class="badge badge-green">ready</span>',
+    processing: '<span class="badge badge-yellow">processing</span>',
+    pending: '<span class="badge badge-purple">pending</span>',
+    error: '<span class="badge badge-red">error</span>',
+  };
+  return map[status] || status;
+}
+
+function roleBadge(role) {
+  const map = {
+    superadmin: 'badge-red', admin: 'badge-purple',
+    operator: 'badge-yellow', viewer: 'badge-green'
+  };
+  return `<span class="badge ${map[role] || 'badge-green'}">${role}</span>`;
+}
+
+function testBotConfig() { toast('Abre el widget para probar el bot', 'info'); }
+</script>
+</body>
+</html>
