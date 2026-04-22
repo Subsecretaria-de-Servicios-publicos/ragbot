@@ -162,7 +162,7 @@ class EmbeddingService:
         results = []
         for text in texts:
             r = await loop.run_in_executor(
-                None, lambda t: genai.embed_content(model="models/embedding-001", content=t), text
+                None, lambda t: genai.embed_content(model=settings.GOOGLE_EMBEDDING_MODEL, content=t), text
             )
             results.append(r["embedding"])
         return results
@@ -214,7 +214,7 @@ class RAGService:
                     content=chunk.content,
                     chunk_index=chunk.chunk_index,
                     page_number=chunk.page_number,
-                    metadata=chunk.metadata,
+                    chunk_metadata=chunk.metadata,
                     embedding=embedding,
                 )
                 db_chunks.append(db_chunk)
@@ -262,7 +262,7 @@ class RAGService:
             f"""
             SELECT
                 dc.id, dc.content, dc.chunk_index, dc.page_number,
-                dc.metadata, dc.document_id,
+                dc.chunk_metadata, dc.document_id,
                 d.original_filename,
                 1 - (dc.embedding <=> '{embedding_str}'::vector) AS similarity
             FROM document_chunks dc
@@ -280,7 +280,7 @@ class RAGService:
                 content=row.content,
                 chunk_index=row.chunk_index,
                 page_number=row.page_number,
-                metadata=row.metadata or {},
+                metadata=row.chunk_metadata or {},
                 score=float(row.similarity),
                 document_id=row.document_id,
                 filename=row.original_filename,
