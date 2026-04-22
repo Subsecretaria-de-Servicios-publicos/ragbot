@@ -148,7 +148,7 @@ class DocumentChunk(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, default=0)
     page_number: Mapped[Optional[int]] = mapped_column(Integer)
-    metadata: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
+    chunk_metadata: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
 
     # Vector embedding — dimensión configurable
     embedding = mapped_column(Vector(1536))  # Cambiar si se usa otro modelo
