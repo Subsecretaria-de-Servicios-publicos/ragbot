@@ -49,6 +49,7 @@ services:
       redis:
         condition: service_healthy
     environment:
+      PYTHONPATH: /app
       DATABASE_URL: postgresql+asyncpg://ragbot_user:${POSTGRES_PASSWORD:-ragbot_secure_pass}@postgres:5432/ragbot_db
       DATABASE_URL_SYNC: postgresql://ragbot_user:${POSTGRES_PASSWORD:-ragbot_secure_pass}@postgres:5432/ragbot_db
       REDIS_URL: redis://redis:6379/0

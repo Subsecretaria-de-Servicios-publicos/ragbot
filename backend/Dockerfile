@@ -17,6 +17,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Código fuente
 COPY . .
 
+# Set PYTHONPATH
+ENV PYTHONPATH=/app
+
 # Crear directorios
 RUN mkdir -p uploads logs static
 
