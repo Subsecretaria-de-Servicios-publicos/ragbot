@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     MAX_CONTEXT_TOKENS: int = 4000
 
     # CORS
-    ALLOWED_ORIGINS: str = "http://localhost:3000"
+    ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3004"
     ALLOWED_METHODS: str = "GET,POST,PUT,DELETE,OPTIONS"
     ALLOWED_HEADERS: str = "*"
 

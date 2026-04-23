@@ -396,11 +396,15 @@ async def delete_document(
     db: AsyncSession = Depends(get_db),
 ):
     doc = await db.get(Document, doc_id)
-    if not doc:
+    if not doc or doc.chatbot_id != bot_id:
         raise HTTPException(404, "Documento no encontrado")
     # Eliminar archivo físico
-    if os.path.exists(doc.file_path):
-        os.remove(doc.file_path)
+    try:
+        if doc.file_path and os.path.exists(doc.file_path):
+            os.remove(doc.file_path)
+    except Exception as e:
+        logger.error("file_deletion_error", path=doc.file_path, error=str(e))
+
     await db.delete(doc)
     await db.commit()
     return {"ok": True}

@@ -13,6 +13,7 @@ asyncpg==0.30.0
 # Auth & Security
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+bcrypt==3.2.0
 python-dotenv==1.0.1
 
 # AI Providers
