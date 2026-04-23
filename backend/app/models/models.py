@@ -83,8 +83,8 @@ class Chatbot(Base):
     is_public: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # AI Config
-    ai_provider: Mapped[AIProvider] = mapped_column(SAEnum(AIProvider), default=AIProvider.openai)
-    ai_model: Mapped[str] = mapped_column(String(100), default="gpt-4o-mini")
+    ai_provider: Mapped[AIProvider] = mapped_column(SAEnum(AIProvider), default=AIProvider.google)
+    ai_model: Mapped[str] = mapped_column(String(100), default="gemini-2.5-flash-lite")
     temperature: Mapped[float] = mapped_column(Float, default=0.7)
     max_tokens: Mapped[int] = mapped_column(Integer, default=1000)
 
@@ -148,10 +148,10 @@ class DocumentChunk(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, default=0)
     page_number: Mapped[Optional[int]] = mapped_column(Integer)
-    metadata: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
+    chunk_metadata: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
 
     # Vector embedding — dimensión configurable
-    embedding = mapped_column(Vector(1536))  # Cambiar si se usa otro modelo
+    embedding = mapped_column(Vector(768))  # Cambiar si se usa otro modelo
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

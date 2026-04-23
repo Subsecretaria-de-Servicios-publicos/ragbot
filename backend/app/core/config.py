@@ -39,9 +39,10 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://localhost:11434"
 
     # Embeddings
-    DEFAULT_EMBEDDING_PROVIDER: str = "openai"
+    DEFAULT_EMBEDDING_PROVIDER: str = "google"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
-    EMBEDDING_DIMENSION: int = 1536
+    GOOGLE_EMBEDDING_MODEL: str = "models/embedding-001"
+    EMBEDDING_DIMENSION: int = 768
 
     # RAG
     CHUNK_SIZE: int = 1000
