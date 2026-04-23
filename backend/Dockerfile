@@ -24,4 +24,4 @@ ENV PYTHONPATH=/app
 RUN mkdir -p uploads logs static
 
 # Ejecutar migraciones y arrancar
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4 --loop uvloop"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4 --loop uvloop"]

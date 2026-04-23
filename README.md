@@ -89,7 +89,7 @@ python scripts/create_superuser.py
 ### PASO 7: Iniciar el Backend
 
 ```bash
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### PASO 8: Servir el Dashboard
