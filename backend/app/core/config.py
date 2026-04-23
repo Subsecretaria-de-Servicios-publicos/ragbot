@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     # Embeddings
     DEFAULT_EMBEDDING_PROVIDER: str = "google"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
-    GOOGLE_EMBEDDING_MODEL: str = "models/embedding-001"
+    GOOGLE_EMBEDDING_MODEL: str = "models/text-embedding-004"
     EMBEDDING_DIMENSION: int = 768
 
     # RAG

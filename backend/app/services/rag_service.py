@@ -132,6 +132,20 @@ class EmbeddingService:
         raise ValueError(f"Embedding provider desconocido: {self.provider}")
 
     async def embed_query(self, text: str) -> list[float]:
+        if self.provider == "google":
+            import google.generativeai as genai
+            genai.configure(api_key=settings.GOOGLE_API_KEY)
+            loop = asyncio.get_event_loop()
+            r = await loop.run_in_executor(
+                None,
+                lambda t: genai.embed_content(
+                    model=settings.GOOGLE_EMBEDDING_MODEL,
+                    content=t,
+                    task_type="retrieval_query"
+                ),
+                text
+            )
+            return r["embedding"]
         results = await self.embed_texts([text])
         return results[0]
 
@@ -159,13 +173,22 @@ class EmbeddingService:
         import google.generativeai as genai
         genai.configure(api_key=settings.GOOGLE_API_KEY)
         loop = asyncio.get_event_loop()
-        results = []
-        for text in texts:
+        all_embeddings = []
+        # Lotes de 100 para optimizar el uso de la API
+        batch_size = 100
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i+batch_size]
             r = await loop.run_in_executor(
-                None, lambda t: genai.embed_content(model=settings.GOOGLE_EMBEDDING_MODEL, content=t), text
+                None,
+                lambda b: genai.embed_content(
+                    model=settings.GOOGLE_EMBEDDING_MODEL,
+                    content=b,
+                    task_type="retrieval_document"
+                ),
+                batch
             )
-            results.append(r["embedding"])
-        return results
+            all_embeddings.extend(r["embedding"])
+        return all_embeddings
 
 
 # ─── RAG Service ─────────────────────────────────────────────
