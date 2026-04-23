@@ -9,6 +9,7 @@ from typing import Optional
 from dataclasses import dataclass
 import numpy as np
 import structlog
+from tenacity import retry, stop_after_attempt, wait_exponential
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -117,8 +118,18 @@ class TextChunker:
 
 # ─── Embeddings ───────────────────────────────────────────────
 class EmbeddingService:
+    # Semáforo global para evitar saturar las APIs en procesos concurrentes
+    # Se inicializa de forma diferida para evitar errores con el event loop en el import
+    _semaphore: Optional[asyncio.Semaphore] = None
+
     def __init__(self, provider: str = None):
         self.provider = provider or settings.DEFAULT_EMBEDDING_PROVIDER
+
+    @classmethod
+    def get_semaphore(cls) -> asyncio.Semaphore:
+        if cls._semaphore is None:
+            cls._semaphore = asyncio.Semaphore(2)
+        return cls._semaphore
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """Genera embeddings en lotes para optimizar costos."""
@@ -136,18 +147,26 @@ class EmbeddingService:
             import google.generativeai as genai
             genai.configure(api_key=settings.GOOGLE_API_KEY)
             loop = asyncio.get_event_loop()
-            r = await loop.run_in_executor(
-                None,
-                lambda t: genai.embed_content(
-                    model=settings.GOOGLE_EMBEDDING_MODEL,
-                    content=t,
-                    task_type="retrieval_query"
-                ),
-                text
-            )
+
+            async with self.get_semaphore():
+                r = await loop.run_in_executor(None, self._call_google_single_with_retry, text)
             return r["embedding"]
+
         results = await self.embed_texts([text])
         return results[0]
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(min=2, max=60),
+        reraise=True
+    )
+    def _call_google_single_with_retry(self, text: str):
+        import google.generativeai as genai
+        return genai.embed_content(
+            model=settings.GOOGLE_EMBEDDING_MODEL,
+            content=text,
+            task_type="retrieval_query"
+        )
 
     async def _openai_embed(self, texts: list[str]) -> list[list[float]]:
         from openai import AsyncOpenAI
@@ -157,10 +176,11 @@ class EmbeddingService:
         batch_size = 100
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i+batch_size]
-            response = await client.embeddings.create(
-                model=settings.OPENAI_EMBEDDING_MODEL,
-                input=batch,
-            )
+            async with self.get_semaphore():
+                response = await client.embeddings.create(
+                    model=settings.OPENAI_EMBEDDING_MODEL,
+                    input=batch,
+                )
             all_embeddings.extend([e.embedding for e in response.data])
         return all_embeddings
 
@@ -174,21 +194,28 @@ class EmbeddingService:
         genai.configure(api_key=settings.GOOGLE_API_KEY)
         loop = asyncio.get_event_loop()
         all_embeddings = []
+
         # Lotes de 100 para optimizar el uso de la API
         batch_size = 100
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i+batch_size]
-            r = await loop.run_in_executor(
-                None,
-                lambda b: genai.embed_content(
-                    model=settings.GOOGLE_EMBEDDING_MODEL,
-                    content=b,
-                    task_type="retrieval_document"
-                ),
-                batch
-            )
+            async with self.get_semaphore():
+                r = await loop.run_in_executor(None, self._call_google_batch_with_retry, batch)
             all_embeddings.extend(r["embedding"])
         return all_embeddings
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(min=2, max=60),
+        reraise=True
+    )
+    def _call_google_batch_with_retry(self, batch: list[str]):
+        import google.generativeai as genai
+        return genai.embed_content(
+            model=settings.GOOGLE_EMBEDDING_MODEL,
+            content=batch,
+            task_type="retrieval_document"
+        )
 
 
 # ─── RAG Service ─────────────────────────────────────────────
