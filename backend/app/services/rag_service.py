@@ -137,12 +137,12 @@ class EmbeddingService:
         """Implementa un retardo entre llamadas para respetar el RPM configurado."""
         if self.provider == "google" and settings.GOOGLE_EMBEDDING_RPM > 0:
             interval = 60.0 / settings.GOOGLE_EMBEDDING_RPM
-            elapsed = time.time() - EmbeddingService._last_call_time
+            elapsed = time.monotonic() - EmbeddingService._last_call_time
             if elapsed < interval:
                 wait_time = interval - elapsed
                 logger.debug("embedding_rate_limit_wait", wait_time=wait_time)
                 await asyncio.sleep(wait_time)
-            EmbeddingService._last_call_time = time.time()
+            EmbeddingService._last_call_time = time.monotonic()
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """Genera embeddings en lotes para optimizar costos."""
