@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     DEFAULT_EMBEDDING_PROVIDER: str = "google"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     GOOGLE_EMBEDDING_MODEL: str = "models/gemini-embedding-001"
+    GOOGLE_EMBEDDING_RPM: int = 15
     EMBEDDING_DIMENSION: int = 768
 
     # RAG

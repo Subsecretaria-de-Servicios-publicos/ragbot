@@ -4,6 +4,7 @@ app/services/rag_service.py — Procesamiento RAG completo: extracción, chunkin
 import os
 import re
 import asyncio
+import time
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
@@ -121,6 +122,7 @@ class EmbeddingService:
     # Semáforo global para evitar saturar las APIs en procesos concurrentes
     # Se inicializa de forma diferida para evitar errores con el event loop en el import
     _semaphore: Optional[asyncio.Semaphore] = None
+    _last_call_time: float = 0.0
 
     def __init__(self, provider: str = None):
         self.provider = provider or settings.DEFAULT_EMBEDDING_PROVIDER
@@ -128,8 +130,19 @@ class EmbeddingService:
     @classmethod
     def get_semaphore(cls) -> asyncio.Semaphore:
         if cls._semaphore is None:
-            cls._semaphore = asyncio.Semaphore(2)
+            cls._semaphore = asyncio.Semaphore(1)
         return cls._semaphore
+
+    async def _wait_for_rate_limit(self):
+        """Implementa un retardo entre llamadas para respetar el RPM configurado."""
+        if self.provider == "google" and settings.GOOGLE_EMBEDDING_RPM > 0:
+            interval = 60.0 / settings.GOOGLE_EMBEDDING_RPM
+            elapsed = time.time() - EmbeddingService._last_call_time
+            if elapsed < interval:
+                wait_time = interval - elapsed
+                logger.debug("embedding_rate_limit_wait", wait_time=wait_time)
+                await asyncio.sleep(wait_time)
+            EmbeddingService._last_call_time = time.time()
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """Genera embeddings en lotes para optimizar costos."""
@@ -149,6 +162,7 @@ class EmbeddingService:
             loop = asyncio.get_event_loop()
 
             async with self.get_semaphore():
+                await self._wait_for_rate_limit()
                 r = await loop.run_in_executor(None, self._call_google_single_with_retry, text)
             return r["embedding"]
 
@@ -200,6 +214,7 @@ class EmbeddingService:
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i+batch_size]
             async with self.get_semaphore():
+                await self._wait_for_rate_limit()
                 r = await loop.run_in_executor(None, self._call_google_batch_with_retry, batch)
             all_embeddings.extend(r["embedding"])
         return all_embeddings
