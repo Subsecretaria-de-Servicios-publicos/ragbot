@@ -695,7 +695,7 @@
         <div class="panel-body">
           <div class="form-group">
             <label class="form-label">URL del Backend</label>
-            <input class="form-input" id="settings-api-url" placeholder="http://localhost:8000">
+            <input class="form-input" id="settings-api-url" placeholder="http://localhost:8040">
           </div>
           <button class="btn btn-primary btn-sm" onclick="saveSettings()">Guardar</button>
           <button class="btn btn-secondary btn-sm" style="margin-left:8px" onclick="testConnection()">🔌 Probar Conexión</button>
@@ -843,7 +843,7 @@
 // ═══════════════════════════════════════════════════════════════
 // CONFIG & STATE
 // ═══════════════════════════════════════════════════════════════
-let API_URL = localStorage.getItem('ragbot_api_url') || 'http://localhost:8000';
+let API_URL = localStorage.getItem('ragbot_api_url') || 'http://localhost:8040';
 let token = localStorage.getItem('ragbot_token');
 let currentUser = null;
 let currentBotId = null;
@@ -1218,7 +1218,7 @@ function updateEmbedCodes(botId) {
 <script src="${API_URL}/api/v1/chatbots/${botId}/widget.js"><\/script>`;
 
   const script2 = `<iframe
-  src="${API_URL}/chat/${botId}"
+  src="${API_URL}/api/v1/chat/${botId}"
   width="400" height="600"
   style="border:none;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,0.2)"
   allow="clipboard-write">
@@ -1226,7 +1226,7 @@ function updateEmbedCodes(botId) {
 
   document.getElementById('embed-script-1').textContent = script1;
   document.getElementById('embed-script-2').textContent = script2;
-  document.getElementById('embed-fullpage').href = `${API_URL}/chat/${botId}`;
+  document.getElementById('embed-fullpage').href = `${API_URL}/api/v1/chat/${botId}`;
 }
 
 function copyEmbed(elementId) {
