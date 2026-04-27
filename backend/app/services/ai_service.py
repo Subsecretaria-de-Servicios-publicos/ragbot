@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from typing import AsyncGenerator, Optional
 from dataclasses import dataclass
 import structlog
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from google.api_core.exceptions import ResourceExhausted
 
 from app.core.config import settings
 
@@ -122,6 +124,12 @@ class GoogleProvider(BaseAIProvider):
         genai.configure(api_key=settings.GOOGLE_API_KEY)
         self.genai = genai
 
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=12, max=60),
+        retry=retry_if_exception_type(ResourceExhausted),
+        reraise=True
+    )
     async def chat(self, messages, model="gemini-2.5-flash-lite", temperature=0.7, max_tokens=1000, stream=False) -> AIResponse:
         import asyncio
         start = time.monotonic()
@@ -221,9 +229,9 @@ class AIService:
         temperature: float = 0.7,
         max_tokens: int = 1000,
     ) -> AIResponse:
-        from tenacity import retry, stop_after_attempt, wait_exponential
-
-        @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+        # Reintentos genéricos para errores temporales (red, timeouts, etc.)
+        # El proveedor Google tiene sus propios reintentos específicos para cuotas.
+        @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
         async def _call():
             p = cls.get_provider(provider)
             return await p.chat(messages, model=model, temperature=temperature, max_tokens=max_tokens)
