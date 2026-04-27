@@ -181,7 +181,8 @@ class EmbeddingService:
         return genai.embed_content(
             model=settings.GOOGLE_EMBEDDING_MODEL,
             content=text,
-            task_type="retrieval_query"
+            task_type="retrieval_query",
+            output_dimensionality=settings.EMBEDDING_DIMENSION
         )
 
     async def _openai_embed(self, texts: list[str]) -> list[list[float]]:
@@ -196,6 +197,7 @@ class EmbeddingService:
                 response = await client.embeddings.create(
                     model=settings.OPENAI_EMBEDDING_MODEL,
                     input=batch,
+                    dimensions=settings.EMBEDDING_DIMENSION,
                 )
             all_embeddings.extend([e.embedding for e in response.data])
         return all_embeddings
@@ -232,7 +234,8 @@ class EmbeddingService:
         return genai.embed_content(
             model=settings.GOOGLE_EMBEDDING_MODEL,
             content=batch,
-            task_type="retrieval_document"
+            task_type="retrieval_document",
+            output_dimensionality=settings.EMBEDDING_DIMENSION
         )
 
 
