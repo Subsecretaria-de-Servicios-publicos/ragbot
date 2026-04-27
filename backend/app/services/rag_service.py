@@ -10,7 +10,8 @@ from typing import Optional
 from dataclasses import dataclass
 import numpy as np
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from google.api_core.exceptions import ResourceExhausted
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -171,7 +172,8 @@ class EmbeddingService:
 
     @retry(
         stop=stop_after_attempt(5),
-        wait=wait_exponential(min=2, max=60),
+        wait=wait_exponential(multiplier=1, min=12, max=60),
+        retry=retry_if_exception_type(ResourceExhausted),
         reraise=True
     )
     def _call_google_single_with_retry(self, text: str):
@@ -221,7 +223,8 @@ class EmbeddingService:
 
     @retry(
         stop=stop_after_attempt(5),
-        wait=wait_exponential(min=2, max=60),
+        wait=wait_exponential(multiplier=1, min=12, max=60),
+        retry=retry_if_exception_type(ResourceExhausted),
         reraise=True
     )
     def _call_google_batch_with_retry(self, batch: list[str]):
