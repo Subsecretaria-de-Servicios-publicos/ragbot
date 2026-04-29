@@ -151,7 +151,7 @@ class DocumentChunk(Base):
     chunk_metadata: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
 
     # Vector embedding — dimensión configurable
-    embedding = mapped_column(Vector(768))  # Cambiar si se usa otro modelo
+    embedding = mapped_column(Vector(3072), nullable=False)  # Cambiar si se usa otro modelo
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

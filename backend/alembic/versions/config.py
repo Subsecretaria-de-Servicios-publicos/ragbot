@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     DEFAULT_EMBEDDING_PROVIDER: str = "google"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-3-small"
     GOOGLE_EMBEDDING_MODEL: str = "gemini-embedding-001"
-    EMBEDDING_DIMENSION: int = 768
+    EMBEDDING_DIMENSION: int = 3072
 
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     MAX_FILE_SIZE_MB: int = 50
 
-    RATE_LIMIT_REQUESTS: int = 100
+    RATE_LIMIT_REQUESTS: int = 300
     RATE_LIMIT_WINDOW_SECONDS: int = 60
 
     LOG_LEVEL: str = "INFO"
