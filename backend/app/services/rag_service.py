@@ -15,7 +15,8 @@ from sqlalchemy import select, update, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.models import Document, DocumentChunk, DocumentStatus
+from app.core.crypto import decrypt_secret, scrub_secrets
+from app.models.models import Chatbot, Document, DocumentChunk, DocumentStatus
 
 logger = structlog.get_logger()
 
@@ -148,8 +149,10 @@ class TextChunker:
 
 # ─── Embeddings ───────────────────────────────────────────────
 class EmbeddingService:
-    def __init__(self, provider: str = None):
+    def __init__(self, provider: str = None, api_key: Optional[str] = None):
         self.provider = provider or settings.DEFAULT_EMBEDDING_PROVIDER
+        # Key con la que se pagan los embeddings (la del bot si coincide el proveedor; si no, la global de .env)
+        self.api_key = api_key
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         loop = asyncio.get_event_loop()
@@ -167,7 +170,7 @@ class EmbeddingService:
 
     async def _openai_embed(self, texts: list[str]) -> list[list[float]]:
         from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        client = AsyncOpenAI(api_key=self.api_key or settings.OPENAI_API_KEY)
         all_embeddings = []
         for i in range(0, len(texts), 100):
             batch = texts[i:i+100]
@@ -188,12 +191,13 @@ class EmbeddingService:
         - Lotes de BATCH_SIZE requests con pausa entre ellos
         - Retry automático con backoff exponencial si llega 429
         """
-        import google.generativeai as genai
+        import httpx
         import re as _re
-        genai.configure(api_key=settings.GOOGLE_API_KEY)
-        loop = asyncio.get_event_loop()
+        api_key = self.api_key or settings.GOOGLE_API_KEY
         results = []
         model_name = settings.GOOGLE_EMBEDDING_MODEL
+        if not model_name.startswith("models/"):
+            model_name = f"models/{model_name}"
 
         BATCH_SIZE = getattr(settings, "GOOGLE_EMBED_BATCH_SIZE", 20)
         DELAY = getattr(settings, "GOOGLE_EMBED_DELAY", 3.5)
@@ -214,15 +218,21 @@ class EmbeddingService:
             for text_item in batch:
                 for attempt in range(MAX_RETRIES):
                     try:
-                        r = await loop.run_in_executor(
-                            None,
-                            lambda t=text_item: genai.embed_content(
-                                model=model_name,
-                                content=t,
-                                task_type="retrieval_document",
+                        # La key va en el header de cada request (no estado global): con una key por bot,
+                        # configurar el cliente globalmente mezclaría las keys entre requests concurrentes.
+                        async with httpx.AsyncClient(timeout=60) as client:
+                            resp = await client.post(
+                                f"https://generativelanguage.googleapis.com/v1beta/{model_name}:embedContent",
+                                headers={"x-goog-api-key": api_key},
+                                json={
+                                    "model": model_name,
+                                    "content": {"parts": [{"text": text_item}]},
+                                    "taskType": "RETRIEVAL_DOCUMENT",
+                                },
                             )
-                        )
-                        results.append(r["embedding"])
+                        if resp.status_code >= 400:
+                            raise RuntimeError(f"Google embeddings respondió {resp.status_code} {resp.reason_phrase}")
+                        results.append(resp.json()["embedding"]["values"])
                         break
 
                     except Exception as e:
@@ -240,7 +250,7 @@ class EmbeddingService:
                             await asyncio.sleep(wait)
                         else:
                             logger.error("google_embed_failed",
-                                         attempt=attempt + 1, error=err[:300])
+                                         attempt=attempt + 1, error=scrub_secrets(err)[:300])
                             raise
 
         logger.info("google_embed_complete", total=len(results))
@@ -252,7 +262,15 @@ class RAGService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.chunker = TextChunker()
-        self.embedder = EmbeddingService()
+
+    async def _embedder_for(self, chatbot_id: str) -> EmbeddingService:
+        """Embeddings pagados con la key del bot cuando su proveedor es el mismo que el de
+        embeddings (google/openai); si difieren (o no hay key), con la global de .env."""
+        bot = await self.db.get(Chatbot, chatbot_id)
+        api_key = None
+        if bot and bot.ai_api_key_encrypted and bot.ai_provider.value == settings.DEFAULT_EMBEDDING_PROVIDER:
+            api_key = decrypt_secret(bot.ai_api_key_encrypted)
+        return EmbeddingService(api_key=api_key)
 
     async def process_document(self, document_id: str) -> bool:
         try:
@@ -276,7 +294,8 @@ class RAGService:
             logger.info("rag_chunks_created", count=len(chunks))
 
             texts = [c.content for c in chunks]
-            embeddings = await self.embedder.embed_texts(texts)
+            embedder = await self._embedder_for(doc.chatbot_id)
+            embeddings = await embedder.embed_texts(texts)
 
             db_chunks = []
             for chunk, embedding in zip(chunks, embeddings):
@@ -300,10 +319,10 @@ class RAGService:
             return True
 
         except Exception as e:
-            logger.error("rag_processing_error", doc_id=document_id, error=str(e))
+            logger.error("rag_processing_error", doc_id=document_id, error=scrub_secrets(str(e)))
             await self.db.execute(
                 update(Document).where(Document.id == document_id)
-                .values(status=DocumentStatus.error, error_message=str(e))
+                .values(status=DocumentStatus.error, error_message=scrub_secrets(str(e)))
             )
             await self.db.commit()
             return False
@@ -321,7 +340,8 @@ class RAGService:
         pero chatbot_id, threshold y top_k ahora son parámetros seguros.
         """
         top_k = top_k or settings.TOP_K_RESULTS
-        query_embedding = await self.embedder.embed_query(query)
+        embedder = await self._embedder_for(chatbot_id)
+        query_embedding = await embedder.embed_query(query)
         # El vector debe interpolarse (limitación de pgvector con asyncpg)
         # pero todos los otros valores van como parámetros bind seguros
         embedding_str = "[" + ",".join(f"{v:.8f}" for v in query_embedding) + "]"

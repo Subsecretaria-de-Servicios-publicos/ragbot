@@ -576,7 +576,7 @@
             <div class="form-row">
               <div class="form-group">
                 <label class="form-label">Proveedor</label>
-                <select class="form-select" id="cfg-provider" onchange="updateModelOptions()">
+                <select class="form-select" id="cfg-provider" onchange="onProviderChange()">
                   <option value="openai">OpenAI</option>
                   <option value="anthropic">Anthropic</option>
                   <option value="google">Google</option>
@@ -598,6 +598,40 @@
               <div class="form-group">
                 <label class="form-label">Max Tokens</label>
                 <input class="form-input" id="cfg-max-tokens" type="number" value="1000" min="100" max="4000">
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">API Key y consumo</span></div>
+          <div class="panel-body">
+            <p style="font-size:13px;color:var(--text2);margin-bottom:14px">
+              Cada bot usa <b>su propia API key</b> del proveedor elegido, así el gasto queda separado por bot.
+              Sin key propia, el bot no responde.
+            </p>
+            <div id="cfg-key-status" style="margin-bottom:12px"></div>
+            <div class="form-group">
+              <label class="form-label" id="cfg-key-label">API key del proveedor</label>
+              <div class="pw-field"><input class="form-input" id="cfg-key-input" type="password" autocomplete="new-password" spellcheck="false" placeholder="Pegá la API key"><button type="button" class="pw-toggle" onclick="togglePw(this)" aria-label="Mostrar contraseña" title="Mostrar contraseña">👁</button></div>
+              <div class="form-hint">Se verifica con el proveedor y se guarda cifrada. Por seguridad no se puede volver a ver: para cambiarla, cargá una nueva.</div>
+            </div>
+            <div id="cfg-key-provider-warning" class="form-hint" style="display:none;color:var(--accent3)">
+              ⚠ Cambiar el proveedor descarta la API key actual al guardar: después hay que cargar la del nuevo proveedor.
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:22px">
+              <button class="btn btn-primary btn-sm" onclick="saveBotKey()">🔑 Guardar key</button>
+              <button class="btn btn-danger btn-sm" id="cfg-key-remove-btn" onclick="deleteBotKey()" style="display:none">Quitar key</button>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Límite mensual de tokens</label>
+                <input class="form-input" id="cfg-token-limit" type="number" min="0" step="1000" placeholder="Sin límite">
+                <div class="form-hint">0 o vacío = sin límite. Al llegar al 100% el bot deja de responder hasta el mes próximo; se avisa al 80% y al 100% (si hay alertas configuradas). Cuenta los tokens del chat.</div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Consumo del mes</label>
+                <div id="cfg-usage-text" style="font-size:13px;font-family:var(--mono);margin-top:8px">-</div>
+                <div class="progress" style="height:8px"><div class="progress-bar" id="cfg-usage-bar" style="width:0%"></div></div>
               </div>
             </div>
           </div>
@@ -1217,7 +1251,7 @@ async function loadChatbots() {
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
             <div>
               <div class="stat-label">Proveedor</div>
-              <div style="font-size:13px"><span class="badge badge-purple">${escapeHtml(b.ai_provider)}/${escapeHtml(b.ai_model)}</span></div>
+              <div style="font-size:13px"><span class="badge badge-purple">${escapeHtml(b.ai_provider)}/${escapeHtml(b.ai_model)}</span>${b.has_ai_key ? '' : ' <span class="badge badge-red" title="Sin API key propia: el bot no responde">sin key</span>'}</div>
             </div>
             <div>
               <div class="stat-label">Conversaciones</div>
@@ -1413,7 +1447,74 @@ async function loadBotConfig(botId) {
     document.getElementById('cfg-is-public').checked = !!bot.is_public;
     renderAvatarPreview(bot.bot_avatar_url);
     renderOrgLogoPreview(bot.org_logo_url);
+    renderKeyAndUsage(bot);
   } catch(e) { toast('Error cargando config: ' + e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// API KEY PROPIA DEL BOT + CONSUMO MENSUAL (solo admin/superadmin)
+// ═══════════════════════════════════════════════════════════════
+let loadedProvider = null;
+
+function renderKeyAndUsage(bot) {
+  loadedProvider = bot.ai_provider;
+  const status = document.getElementById('cfg-key-status');
+  const isOllama = bot.ai_provider === 'ollama';
+  if (isOllama) {
+    status.innerHTML = '<span class="badge badge-green">Ollama no usa API key</span>';
+  } else if (bot.has_ai_key) {
+    const when = bot.ai_key_updated_at ? ' · actualizada ' + new Date(bot.ai_key_updated_at).toLocaleString() : '';
+    status.innerHTML = `<span class="badge badge-green">🔑 Configurada · termina en …${escapeHtml(bot.ai_key_hint || '????')}</span>
+      <span style="font-size:12px;color:var(--text3)">${escapeHtml(when)}</span>`;
+  } else {
+    status.innerHTML = '<span class="badge badge-red">⚠ Sin API key propia — este bot no responde</span>';
+  }
+  document.getElementById('cfg-key-input').value = '';
+  hidePasswords(document.getElementById('cfg-key-input').closest('.panel'));
+  document.getElementById('cfg-key-input').disabled = isOllama;
+  document.getElementById('cfg-key-remove-btn').style.display = (bot.has_ai_key && !isOllama) ? '' : 'none';
+  document.getElementById('cfg-key-provider-warning').style.display = 'none';
+  document.getElementById('cfg-key-label').textContent = `API key de ${bot.ai_provider}`;
+
+  const limit = bot.monthly_token_limit || 0, used = bot.usage_month_tokens || 0;
+  document.getElementById('cfg-token-limit').value = limit || '';
+  const pct = limit ? Math.min(100, Math.round(used / limit * 100)) : 0;
+  document.getElementById('cfg-usage-text').textContent = limit
+    ? `${formatNum(used)} / ${formatNum(limit)} tokens (${pct}%) · ${bot.usage_month}`
+    : `${formatNum(used)} tokens · sin límite · ${bot.usage_month}`;
+  const bar = document.getElementById('cfg-usage-bar');
+  bar.style.width = (limit ? pct : 0) + '%';
+  bar.style.background = pct >= 100 ? 'var(--danger)' : (pct >= 80 ? 'var(--accent3)' : 'var(--accent)');
+}
+
+function onProviderChange() {
+  updateModelOptions();
+  const changed = loadedProvider && document.getElementById('cfg-provider').value !== loadedProvider;
+  document.getElementById('cfg-key-provider-warning').style.display = changed ? '' : 'none';
+}
+
+async function saveBotKey() {
+  const input = document.getElementById('cfg-key-input');
+  const key = input.value.trim();
+  if (!key) { toast('Pegá la API key primero', 'error'); return; }
+  if (document.getElementById('cfg-provider').value !== loadedProvider) {
+    toast('Primero guardá el cambio de proveedor y después cargá la key del nuevo', 'error'); return;
+  }
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}/ai-key`, 'PUT', { api_key: key });
+    input.value = '';
+    toast('API key verificada y guardada', 'success');
+    loadBotConfig(currentBotId);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteBotKey() {
+  if (!confirm('¿Quitar la API key de este bot? Dejará de responder hasta que se cargue otra.')) return;
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}/ai-key`, 'DELETE');
+    toast('API key eliminada', 'success');
+    loadBotConfig(currentBotId);
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 function renderAvatarPreview(avatarUrl) {
@@ -1552,10 +1653,12 @@ async function saveBotConfig() {
     top_k: parseInt(document.getElementById('cfg-top-k').value),
     similarity_threshold: parseFloat(document.getElementById('cfg-threshold').value),
     is_public: document.getElementById('cfg-is-public').checked,
+    monthly_token_limit: parseInt(document.getElementById('cfg-token-limit').value) || 0,  // 0 = sin límite
   });
   try {
     await api(`/api/v1/chatbots/${currentBotId}`, 'PATCH', data);
     toast('Configuración guardada', 'success');
+    loadBotConfig(currentBotId);  // refresca estado de la key (cambiar de proveedor la descarta) y consumo
   } catch(e) { toast(e.message, 'error'); }
 }
 

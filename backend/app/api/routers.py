@@ -20,7 +20,7 @@ from pydantic import BaseModel, EmailStr
 import structlog
 
 from app.db.session import get_db
-from app.services.alert_service import notify_bot_failure
+from app.services.alert_service import notify_bot_failure, notify_bot_event
 from app.models.models import (
     User, Chatbot, Document, DocumentChunk, Conversation, Message,
     UserRole, DocumentStatus, APIKey, AIProviderConfig, ChatbotAssignment,
@@ -32,7 +32,8 @@ from app.core.security import (
 )
 from app.core.config import settings
 from app.core.net import get_client_ip
-from app.core.crypto import encrypt_secret, decrypt_secret
+from app.core.crypto import encrypt_secret, decrypt_secret, scrub_secrets
+from app.services.bot_keys import BotUnavailable, MSG_UNAVAILABLE, month_usage, current_month
 from app.services.chat_service import ChatService
 from app.services.rag_service import RAGService
 
@@ -96,6 +97,7 @@ class ChatbotUpdate(BaseModel):
     similarity_threshold: Optional[float] = None
     is_active: Optional[bool] = None
     is_public: Optional[bool] = None
+    monthly_token_limit: Optional[int] = None  # solo admin; 0 = sin límite
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -270,7 +272,8 @@ async def list_chatbots(payload: dict = Depends(get_current_user_payload), db: A
              "ai_provider": b.ai_provider.value, "ai_model": b.ai_model,
              "total_conversations": b.total_conversations,
              "total_messages": b.total_messages,
-             "total_tokens_used": b.total_tokens_used} for b in bots]
+             "total_tokens_used": b.total_tokens_used,
+             "has_ai_key": bool(b.ai_api_key_encrypted) or b.ai_provider.value == "ollama"} for b in bots]
 
 
 @chatbots_router.post("/", status_code=201)
@@ -298,6 +301,14 @@ async def get_chatbot(bot_id: str, payload: dict = Depends(get_current_user_payl
         "total_messages": bot.total_messages,
         "total_tokens_used": bot.total_tokens_used,
         "created_at": bot.created_at.isoformat(),
+        # API key propia: solo su estado. El valor no sale nunca; el detalle (últimos 4, quién/cuándo) solo para admin.
+        "has_ai_key": bool(bot.ai_api_key_encrypted),
+        **({"ai_key_hint": bot.ai_api_key_hint,
+            "ai_key_updated_at": bot.ai_api_key_updated_at.isoformat() if bot.ai_api_key_updated_at else None}
+           if payload["role"] in ("superadmin", "admin") else {}),
+        "monthly_token_limit": bot.monthly_token_limit,
+        "usage_month": current_month(),
+        "usage_month_tokens": month_usage(bot),
     }
 
 
@@ -310,9 +321,63 @@ async def update_chatbot(bot_id: str, data: ChatbotUpdate, payload: dict = Depen
         disallowed = set(updates) - ASSIGNEE_EDITABLE_FIELDS
         if disallowed:
             raise HTTPException(403, f"No tenés permiso para editar: {', '.join(sorted(disallowed))}")
+    if "monthly_token_limit" in updates:
+        # Control de gasto: solo admin/superadmin (aunque el operator sea dueño del bot)
+        if payload["role"] not in ("superadmin", "admin"):
+            raise HTTPException(403, "Solo un administrador puede cambiar el límite mensual de tokens")
+        if updates["monthly_token_limit"] < 0:
+            raise HTTPException(400, "El límite mensual no puede ser negativo")
+        updates["monthly_token_limit"] = updates["monthly_token_limit"] or None  # 0 = sin límite
+    if "ai_provider" in updates and updates["ai_provider"] != bot.ai_provider.value and bot.ai_api_key_encrypted:
+        # La key pertenece al proveedor anterior: se descarta (hay que cargar la del nuevo)
+        bot.ai_api_key_encrypted = bot.ai_api_key_hint = None
+        bot.ai_api_key_updated_at, bot.ai_api_key_updated_by = datetime.now(timezone.utc), payload["sub"]
+        logger.info("bot_api_key_cleared_provider_change", bot_id=bot.id, by=payload["sub"])
     for k, v in updates.items():
         setattr(bot, k, v)
     await db.commit()
+    return {"ok": True}
+
+
+class BotApiKeyUpdate(BaseModel):
+    # Sin constraints de pydantic a propósito: un error de validación (422) devuelve el valor recibido
+    # y no queremos que una key vuelva en una respuesta. Se valida a mano, sin repetirla.
+    api_key: str
+
+
+@chatbots_router.put("/{bot_id}/ai-key")
+async def set_bot_api_key(bot_id: str, data: BotApiKeyUpdate, payload: dict = Depends(require_role("admin")), db: AsyncSession = Depends(get_db)):
+    """Guarda (cifrada) la API key propia del bot. Solo admin/superadmin. Se verifica contra el
+    proveedor antes de guardarla y jamás se devuelve."""
+    bot = await _get_owned_chatbot(bot_id, payload, db)
+    provider = bot.ai_provider.value
+    if provider == "ollama":
+        raise HTTPException(400, "Ollama no usa API key")
+    key = (data.api_key or "").strip()
+    if len(key) < 8 or len(key) > 512 or any(c.isspace() for c in key):
+        raise HTTPException(400, "La API key no tiene un formato válido")
+    try:
+        await asyncio.wait_for(_fetch_live_models(provider, key), timeout=20)
+    except Exception:
+        # Sin detalle del error: podría reflejar la key. El log tampoco la incluye.
+        logger.warning("bot_api_key_rejected", bot_id=bot_id, provider=provider, by=payload["sub"])
+        raise HTTPException(400, f"{provider} rechazó la API key (o no se pudo verificar). Revisala e intentá de nuevo")
+    bot.ai_api_key_encrypted = encrypt_secret(key)
+    bot.ai_api_key_hint = key[-4:]
+    bot.ai_api_key_updated_at = datetime.now(timezone.utc)
+    bot.ai_api_key_updated_by = payload["sub"]
+    await db.commit()
+    logger.info("bot_api_key_set", bot_id=bot_id, provider=provider, by=payload["sub"], hint=key[-4:])
+    return {"ok": True, "hint": key[-4:]}
+
+
+@chatbots_router.delete("/{bot_id}/ai-key")
+async def delete_bot_api_key(bot_id: str, payload: dict = Depends(require_role("admin")), db: AsyncSession = Depends(get_db)):
+    bot = await _get_owned_chatbot(bot_id, payload, db)
+    bot.ai_api_key_encrypted = bot.ai_api_key_hint = None
+    bot.ai_api_key_updated_at, bot.ai_api_key_updated_by = datetime.now(timezone.utc), payload["sub"]
+    await db.commit()
+    logger.info("bot_api_key_deleted", bot_id=bot_id, by=payload["sub"])
     return {"ok": True}
 
 
@@ -691,16 +756,26 @@ async def _fetch_live_models(provider: str, api_key: str, base_url: Optional[str
         return [m["id"] for m in data.get("data", [])]
 
     if provider == "google":
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-
-        def _list():
-            return [
-                m.name.replace("models/", "")
-                for m in genai.list_models()
-                if "generateContent" in getattr(m, "supported_generation_methods", [])
-            ]
-        return sorted(set(await asyncio.to_thread(_list)))
+        import httpx
+        models, page_token = [], None
+        async with httpx.AsyncClient(timeout=15) as client:
+            for _ in range(10):  # paginado
+                resp = await client.get(
+                    "https://generativelanguage.googleapis.com/v1beta/models",
+                    headers={"x-goog-api-key": api_key},
+                    params={"pageSize": 100, **({"pageToken": page_token} if page_token else {})},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                models += [
+                    m["name"].replace("models/", "")
+                    for m in data.get("models", [])
+                    if "generateContent" in m.get("supportedGenerationMethods", [])
+                ]
+                page_token = data.get("nextPageToken")
+                if not page_token:
+                    break
+        return sorted(set(models))
 
     if provider == "ollama":
         import httpx
@@ -1160,10 +1235,16 @@ async def chat_api(
             user_agent=request.headers.get("user-agent"),
         )
         return result
+    except BotUnavailable as e:
+        # Sin key propia o sin cupo: el usuario final ve un mensaje genérico; el motivo real queda en el log
+        logger.warning("bot_unavailable", bot_id=bot_id, reason=str(e))
+        if e.public_message == MSG_UNAVAILABLE:  # el aviso del límite ya lo maneja record_usage (80%/100%)
+            asyncio.create_task(notify_bot_event(bot_id, "no-api-key", f"Bot {bot_id} sin API key propia", str(e)))
+        raise HTTPException(503, e.public_message)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
-        logger.error("chat_error", error=str(e))
+        logger.error("chat_error", error=scrub_secrets(str(e)))
         asyncio.create_task(notify_bot_failure(bot_id, e))
         raise HTTPException(500, "Error interno del servidor")
 

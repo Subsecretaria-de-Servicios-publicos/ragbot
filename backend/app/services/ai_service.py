@@ -8,9 +8,10 @@ from typing import AsyncGenerator, Optional
 from dataclasses import dataclass
 import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from google.api_core.exceptions import ResourceExhausted
+import httpx
 
 from app.core.config import settings
+from app.core.crypto import scrub_secrets
 
 logger = structlog.get_logger()
 
@@ -118,26 +119,29 @@ class AnthropicProvider(BaseAIProvider):
 
 
 # ─── Google Provider ──────────────────────────────────────────
+GOOGLE_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
+
+
+class GoogleRateLimited(Exception):
+    """429 de la API de Google (cuota/rate limit): se reintenta con backoff."""
+
+
 class GoogleProvider(BaseAIProvider):
+    """Usa la API REST con la key en el header de CADA request. No se usa genai.configure():
+    es estado global del proceso y, con una key por bot, una request podría salir con la key
+    de otro bot (imputando el gasto donde no corresponde)."""
+
     def __init__(self, api_key: Optional[str] = None):
-        import google.generativeai as genai
-        genai.configure(api_key=api_key or settings.GOOGLE_API_KEY)
-        self.genai = genai
+        self.api_key = api_key or settings.GOOGLE_API_KEY
 
     @retry(
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=12, max=60),
-        retry=retry_if_exception_type(ResourceExhausted),
+        retry=retry_if_exception_type(GoogleRateLimited),
         reraise=True
     )
     async def chat(self, messages, model="gemini-2.5-flash-lite", temperature=0.7, max_tokens=1000, stream=False) -> AIResponse:
-        import asyncio
         start = time.monotonic()
-
-        gen_model = self.genai.GenerativeModel(
-            model_name=model,
-            generation_config={"temperature": temperature, "max_output_tokens": max_tokens},
-        )
 
         # Convertir mensajes al formato Gemini
         system_parts = [m.content for m in messages if m.role == "system"]
@@ -149,22 +153,46 @@ class GoogleProvider(BaseAIProvider):
             if m.role == "user":
                 last_user = m.content
                 if history:
-                    history.append({"role": "user", "parts": [m.content]})
+                    history.append({"role": "user", "parts": [{"text": m.content}]})
             elif m.role == "assistant":
-                history.append({"role": "model", "parts": [m.content]})
+                history.append({"role": "model", "parts": [{"text": m.content}]})
 
-        chat_session = gen_model.start_chat(history=history[:-1] if history else [])
         full_prompt = ("\n".join(system_parts) + "\n\n" + last_user).strip() if system_parts else last_user
-        response = await asyncio.to_thread(chat_session.send_message, full_prompt)
+        contents = (history[:-1] if history else []) + [{"role": "user", "parts": [{"text": full_prompt}]}]
+
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(
+                f"{GOOGLE_API_BASE}/models/{model}:generateContent",
+                headers={"x-goog-api-key": self.api_key},
+                json={
+                    "contents": contents,
+                    "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
+                },
+            )
+        if resp.status_code == 429:
+            raise GoogleRateLimited("Google API 429 (cuota o rate limit)")
+        if resp.status_code >= 400:
+            # Solo el código: el cuerpo de error del proveedor no se propaga (podría reflejar datos sensibles)
+            raise RuntimeError(f"Google API respondió {resp.status_code}")
+        data = resp.json()
         latency_ms = int((time.monotonic() - start) * 1000)
 
+        candidates = data.get("candidates") or []
+        parts = (candidates[0].get("content") or {}).get("parts", []) if candidates else []
+        text_out = "".join(p.get("text", "") for p in parts)
+        if not text_out:
+            reason = (candidates[0].get("finishReason") if candidates else None) or \
+                     (data.get("promptFeedback") or {}).get("blockReason") or "sin contenido"
+            raise ValueError(f"Google no devolvió una respuesta ({reason})")
+
+        usage = data.get("usageMetadata") or {}
         return AIResponse(
-            content=response.text,
+            content=text_out,
             model=model,
             provider="google",
-            prompt_tokens=getattr(response.usage_metadata, "prompt_token_count", 0),
-            completion_tokens=getattr(response.usage_metadata, "candidates_token_count", 0),
-            total_tokens=getattr(response.usage_metadata, "total_token_count", 0),
+            prompt_tokens=usage.get("promptTokenCount", 0),
+            completion_tokens=usage.get("candidatesTokenCount", 0),
+            total_tokens=usage.get("totalTokenCount", 0),
             latency_ms=latency_ms,
         )
 
@@ -248,5 +276,5 @@ class AIService:
         try:
             return await _call()
         except Exception as e:
-            logger.error("ai_service_error", provider=provider, model=model, error=str(e))
+            logger.error("ai_service_error", provider=provider, model=model, error=scrub_secrets(str(e)))
             raise

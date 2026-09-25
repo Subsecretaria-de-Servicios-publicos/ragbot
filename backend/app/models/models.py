@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy import (
-    String, Text, Boolean, Integer, Float, DateTime,
+    String, Text, Boolean, Integer, BigInteger, Float, DateTime,
     ForeignKey, JSON, Enum as SAEnum, UniqueConstraint, Index
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -102,6 +102,19 @@ class Chatbot(Base):
     # RAG Config
     top_k: Mapped[int] = mapped_column(Integer, default=5)
     similarity_threshold: Mapped[float] = mapped_column(Float, default=0.7)
+
+    # API key propia del bot (del proveedor de IA elegido). Se guarda cifrada y NUNCA se devuelve
+    # por la API: solo un indicador de que existe y los últimos 4 caracteres para identificarla.
+    ai_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text)
+    ai_api_key_hint: Mapped[Optional[str]] = mapped_column(String(8))
+    ai_api_key_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ai_api_key_updated_by: Mapped[Optional[str]] = mapped_column(String(36))
+
+    # Control de gasto: límite mensual de tokens (NULL = sin límite) y consumo del mes en curso.
+    monthly_token_limit: Mapped[Optional[int]] = mapped_column(BigInteger)
+    usage_month: Mapped[Optional[str]] = mapped_column(String(7))  # "YYYY-MM" (UTC) al que corresponde el contador
+    usage_month_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    usage_alert_level: Mapped[int] = mapped_column(Integer, default=0)  # 0 | 80 | 100: último aviso enviado este mes
 
     # Stats
     total_conversations: Mapped[int] = mapped_column(Integer, default=0)

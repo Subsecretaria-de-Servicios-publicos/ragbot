@@ -12,7 +12,7 @@ from app.models.models import Chatbot, Conversation, Message, MessageRole, AIPro
 from app.services.ai_service import AIService, ChatMessage
 from app.services.rag_service import RAGService
 from app.core.config import settings
-from app.core.crypto import decrypt_secret
+from app.services.bot_keys import require_bot_api_key, enforce_monthly_limit, record_usage
 
 logger = structlog.get_logger()
 
@@ -131,6 +131,11 @@ class ChatService:
         if not chatbot or not chatbot.is_active or not chatbot.is_public:
             raise ValueError("Chatbot no disponible")
 
+        # Control de gasto: sin API key propia el bot no responde, y al alcanzar el límite mensual
+        # tampoco (antes de gastar tokens de búsqueda o de LLM). Ambos lanzan BotUnavailable.
+        bot_api_key = require_bot_api_key(chatbot)
+        enforce_monthly_limit(chatbot)
+
         # 2. Conversación
         conv = await self.get_or_create_conversation(chatbot_id, session_id, ip_address, user_agent)
         history = await self.get_history(conv.id)
@@ -172,17 +177,14 @@ Solo JSON, sin markdown ni explicaciones extra."""
             ChatMessage(role="user", content=user_message),
         ]
 
-        # 5. Llamar al LLM
-        # Si el superadmin configuró una API key/base_url para este proveedor en el panel
-        # "Proveedores de IA", usarla; si no, AIService cae de vuelta a las de .env.
-        provider_cfg = await self.db.scalar(
-            select(AIProviderConfig).where(AIProviderConfig.provider == chatbot.ai_provider)
-        )
-        api_key_override = (
-            decrypt_secret(provider_cfg.api_key_encrypted)
-            if provider_cfg and provider_cfg.api_key_encrypted else None
-        )
-        base_url_override = provider_cfg.base_url if provider_cfg else None
+        # 5. Llamar al LLM con la API key propia del bot. base_url solo aplica a Ollama
+        # (se configura por proveedor en el panel "Proveedores de IA").
+        base_url_override = None
+        if chatbot.ai_provider.value == "ollama":
+            provider_cfg = await self.db.scalar(
+                select(AIProviderConfig).where(AIProviderConfig.provider == chatbot.ai_provider)
+            )
+            base_url_override = provider_cfg.base_url if provider_cfg else None
 
         ai_response = await AIService.chat(
             provider=chatbot.ai_provider.value,
@@ -190,7 +192,7 @@ Solo JSON, sin markdown ni explicaciones extra."""
             messages=messages,
             temperature=chatbot.temperature,
             max_tokens=chatbot.max_tokens,
-            api_key=api_key_override,
+            api_key=bot_api_key,
             base_url=base_url_override,
         )
 
@@ -236,6 +238,7 @@ Solo JSON, sin markdown ni explicaciones extra."""
                 total_tokens_used=Chatbot.total_tokens_used + ai_response.total_tokens,
             )
         )
+        await record_usage(self.db, chatbot, ai_response.total_tokens)
         await self.db.commit()
 
         return {
