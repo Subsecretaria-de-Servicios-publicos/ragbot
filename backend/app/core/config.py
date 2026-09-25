@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     # cualquiera puede falsificar ese header y evadir el rate limit por completo.
     TRUST_PROXY_HEADERS: bool = False
 
+    # URL pública del API tal como la ve el navegador (incluye el prefijo si lo hay), ej.
+    # https://subsecretar-ia.salta.gob.ar/ragbot. La usan la página de chat y widget.js para
+    # armar las URLs de imágenes y de llamadas. Vacío = se deduce de la request.
+    PUBLIC_API_URL: str = ""
+
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "./logs/ragbot.log"
 

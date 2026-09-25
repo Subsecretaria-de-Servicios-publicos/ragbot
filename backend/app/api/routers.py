@@ -530,7 +530,7 @@ async def delete_gov_logo(payload: dict = Depends(require_role("superadmin"))):
 
 
 @chatbots_router.get("/{bot_id}/widget.js")
-async def get_widget_script(bot_id: str, key: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+async def get_widget_script(bot_id: str, request: Request, key: Optional[str] = None, db: AsyncSession = Depends(get_db)):
     bot = await db.get(Chatbot, bot_id)
     if not bot or not bot.is_active or not bot.is_public:
         raise HTTPException(404, "Bot no disponible")
@@ -549,9 +549,10 @@ async def get_widget_script(bot_id: str, key: Optional[str] = None, db: AsyncSes
         "position": widget_config.get("position", "bottom-right"),
         "apiKey": key,  # si el bot tiene API keys activas, esta se manda como X-API-Key en cada mensaje
     }).replace("</", "<\\/")
+    api_url_json = json.dumps(_public_api_url(request, widget_config.get("api_url"))).replace("</", "<\\/")
     script = f"""(function(){{
   var config = {config_json};
-  config.apiUrl = window.RAGBOT_API_URL || "http://localhost:8040";
+  config.apiUrl = window.RAGBOT_API_URL || {api_url_json};
   var s = document.createElement('script');
   s.src = config.apiUrl + '/static/widget.js';
   s.onload = function(){{ window.RAGBot.init(config); }};
@@ -1032,6 +1033,13 @@ def _tint_hex(hex_color: str, amount: float = 0.85) -> str:
     return f"#{mix(r):02x}{mix(g):02x}{mix(b):02x}"
 
 
+def _public_api_url(request: Request, configured: Optional[str] = None) -> str:
+    """URL base del API para el navegador: la del bot (widget_config.api_url), si no
+    PUBLIC_API_URL, y como último recurso el origen de la request (nunca un localhost fijo)."""
+    url = configured or settings.PUBLIC_API_URL or str(request.base_url)
+    return url.rstrip("/")
+
+
 def _avatar_html(avatar_value: str, api_url: str) -> str:
     """HTML seguro para el avatar: <img> si es una URL/path de imagen subida, o el
     emoji/texto escapado si no. Nunca vuelca el valor crudo sin escapar."""
@@ -1045,7 +1053,7 @@ def _avatar_html(avatar_value: str, api_url: str) -> str:
 
 
 @chat_router.get("/{bot_id}", response_class=HTMLResponse)
-async def chat_page(bot_id: str, key: Optional[str] = None, db: AsyncSession = Depends(get_db)):
+async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db: AsyncSession = Depends(get_db)):
     """Sirve la página HTML del chat — usada por iframe y 'Abrir en nueva pestaña'."""
     bot = await db.get(Chatbot, bot_id)
     if not bot or not bot.is_active or not bot.is_public:
@@ -1060,8 +1068,7 @@ async def chat_page(bot_id: str, key: Optional[str] = None, db: AsyncSession = D
         secondary_color = "#a78bfa"
     bot_bubble_color = _tint_hex(secondary_color, 0.85)
     avatar = bot.bot_avatar_url or "🤖"
-    # Detectar la URL del API desde el request o usar la configurada
-    api_url = config.get("api_url", "http://localhost:8040")
+    api_url = _public_api_url(request, config.get("api_url"))
     avatar_html = _avatar_html(avatar, api_url)
     gov_logo_url = _gov_logo_url()
     gov_logo_html = (
