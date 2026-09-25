@@ -201,6 +201,14 @@
     border-radius: 6px; color: var(--text); font-size: 13px;
     font-family: var(--sans); transition: border-color 0.15s; outline: none;
   }
+  .pw-field { position: relative; }
+  .pw-field .form-input { padding-right: 40px; }
+  .pw-toggle {
+    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; cursor: pointer; font-size: 16px;
+    padding: 6px 8px; line-height: 1; opacity: .6;
+  }
+  .pw-toggle:hover, .pw-toggle:focus-visible { opacity: 1; }
   .form-input:focus, .form-select:focus, .form-textarea:focus {
     border-color: var(--accent);
   }
@@ -356,7 +364,7 @@
     </div>
     <div class="form-group">
       <label class="form-label">Contraseña</label>
-      <input class="form-input" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password">
+      <div class="pw-field"><input class="form-input" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password"><button type="button" class="pw-toggle" onclick="togglePw(this)" aria-label="Mostrar contraseña" title="Mostrar contraseña">👁</button></div>
     </div>
     <button class="btn btn-primary" style="width:100%;justify-content:center;padding:11px" onclick="doLogin()">
       Iniciar Sesión
@@ -931,7 +939,7 @@
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">Contraseña *</label>
-          <input class="form-input" id="nu-password" type="password">
+          <div class="pw-field"><input class="form-input" id="nu-password" type="password"><button type="button" class="pw-toggle" onclick="togglePw(this)" aria-label="Mostrar contraseña" title="Mostrar contraseña">👁</button></div>
         </div>
         <div class="form-group">
           <label class="form-label">Rol</label>
@@ -984,7 +992,7 @@
       </div>
       <div class="form-group">
         <label class="form-label">Nueva Contraseña</label>
-        <input class="form-input" id="eu-password" type="password" placeholder="Dejar vacío para no cambiarla">
+        <div class="pw-field"><input class="form-input" id="eu-password" type="password" placeholder="Dejar vacío para no cambiarla"><button type="button" class="pw-toggle" onclick="togglePw(this)" aria-label="Mostrar contraseña" title="Mostrar contraseña">👁</button></div>
       </div>
     </div>
     <div class="modal-footer">
@@ -1087,6 +1095,8 @@ function doLogout() {
   localStorage.removeItem('ragbot_token');
   token = null;
   currentUser = null;
+  document.getElementById('login-pass').value = '';
+  hidePasswords(document.getElementById('login-screen'));
   document.getElementById('login-screen').style.display = 'flex';
 }
 
@@ -1877,6 +1887,7 @@ async function loadUsers() {
 }
 
 function openCreateUserModal() {
+  hidePasswords(document.getElementById('modal-create-user'));
   document.getElementById('modal-create-user').classList.add('open');
 }
 
@@ -1916,6 +1927,7 @@ function openEditUserModal(userId) {
   document.getElementById('eu-fullname').value = u.full_name || '';
   document.getElementById('eu-role').value = u.role || 'viewer';
   document.getElementById('eu-password').value = '';
+  hidePasswords(document.getElementById('modal-edit-user'));
   document.getElementById('modal-edit-user').classList.add('open');
 }
 
@@ -2015,6 +2027,25 @@ function statusBadge(status) {
     error: '<span class="badge badge-red">error</span>',
   };
   return map[status] || status;
+}
+
+// Vuelve a ocultar las contraseñas dentro de un contenedor (al abrir modales / cerrar sesión)
+function hidePasswords(root = document) {
+  root.querySelectorAll('.pw-field').forEach(f => {
+    const input = f.querySelector('input'), btn = f.querySelector('.pw-toggle');
+    if (input.type !== 'password') togglePw(btn);
+  });
+}
+
+// Mostrar/ocultar contraseña (botón dentro de .pw-field)
+function togglePw(btn) {
+  const input = btn.parentElement.querySelector('input');
+  const show = input.type === 'password';
+  input.type = show ? 'text' : 'password';
+  btn.textContent = show ? '🙈' : '👁';
+  const label = show ? 'Ocultar contraseña' : 'Mostrar contraseña';
+  btn.setAttribute('aria-label', label);
+  btn.title = label;
 }
 
 function roleBadge(role) {
