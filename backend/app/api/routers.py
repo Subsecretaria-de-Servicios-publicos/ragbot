@@ -249,12 +249,21 @@ async def _get_owned_chatbot(bot_id: str, payload: dict, db: AsyncSession) -> Ch
     raise HTTPException(404, "Chatbot no encontrado")
 
 
+def _visible_bot_ids(payload: dict):
+    """Subquery con los ids de los bots que el usuario puede ver (dueño o asignado);
+    None si ve todos (superadmin/admin). Misma regla que _get_owned_chatbot."""
+    if payload["role"] in ("superadmin", "admin"):
+        return None
+    assigned_ids = select(ChatbotAssignment.chatbot_id).where(ChatbotAssignment.user_id == payload["sub"])
+    return select(Chatbot.id).where(or_(Chatbot.owner_id == payload["sub"], Chatbot.id.in_(assigned_ids)))
+
+
 @chatbots_router.get("/")
 async def list_chatbots(payload: dict = Depends(get_current_user_payload), db: AsyncSession = Depends(get_db)):
     query = select(Chatbot)
-    if payload["role"] not in ("superadmin", "admin"):
-        assigned_ids = select(ChatbotAssignment.chatbot_id).where(ChatbotAssignment.user_id == payload["sub"])
-        query = query.where(or_(Chatbot.owner_id == payload["sub"], Chatbot.id.in_(assigned_ids)))
+    visible = _visible_bot_ids(payload)
+    if visible is not None:
+        query = query.where(Chatbot.id.in_(visible))
     result = await db.execute(query.order_by(Chatbot.created_at.desc()))
     bots = result.scalars().all()
     return [{"id": b.id, "name": b.name, "slug": b.slug, "is_active": b.is_active,
@@ -1168,11 +1177,20 @@ analytics_router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 @analytics_router.get("/dashboard")
 async def dashboard_stats(payload: dict = Depends(require_role("viewer")), db: AsyncSession = Depends(get_db)):
-    bots_count = await db.scalar(select(func.count(Chatbot.id)))
-    docs_count = await db.scalar(select(func.count(Document.id)).where(Document.status == DocumentStatus.ready))
-    convs_count = await db.scalar(select(func.count(Conversation.id)))
-    msgs_count = await db.scalar(select(func.count(Message.id)))
-    total_tokens = await db.scalar(select(func.sum(Chatbot.total_tokens_used))) or 0
+    # Admin/superadmin: totales globales. El resto: solo los bots que puede ver (dueño o asignado).
+    visible = _visible_bot_ids(payload)
+
+    def scoped(query, bot_id_col):
+        return query if visible is None else query.where(bot_id_col.in_(visible))
+
+    bots_count = await db.scalar(scoped(select(func.count(Chatbot.id)), Chatbot.id))
+    docs_count = await db.scalar(scoped(
+        select(func.count(Document.id)).where(Document.status == DocumentStatus.ready), Document.chatbot_id))
+    convs_count = await db.scalar(scoped(select(func.count(Conversation.id)), Conversation.chatbot_id))
+    msgs_count = await db.scalar(scoped(
+        select(func.count(Message.id)).join(Conversation, Message.conversation_id == Conversation.id),
+        Conversation.chatbot_id))
+    total_tokens = await db.scalar(scoped(select(func.sum(Chatbot.total_tokens_used)), Chatbot.id)) or 0
     return {"chatbots": bots_count, "documents_ready": docs_count,
             "conversations": convs_count, "messages": msgs_count,
             "total_tokens_used": total_tokens}
