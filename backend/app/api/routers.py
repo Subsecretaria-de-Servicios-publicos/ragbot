@@ -553,53 +553,75 @@ branding_router = APIRouter(prefix="/admin/branding", tags=["branding"])
 BRANDING_DIR = os.path.join("static", "branding")
 GOV_LOGO_EXTS = IMAGE_EXTS
 
+# Logos globales de marca (los sube el superadmin, iguales en todos los bots):
+#   gov_logo    -> header (Gobierno de Salta)
+#   footer_logo -> pie del chat (Modernización)
 
-def _gov_logo_url() -> Optional[str]:
+
+def _branding_logo_url(name: str) -> Optional[str]:
     for ext in GOV_LOGO_EXTS:
-        if os.path.exists(os.path.join(BRANDING_DIR, f"gov_logo.{ext}")):
-            return f"/static/branding/gov_logo.{ext}"
+        if os.path.exists(os.path.join(BRANDING_DIR, f"{name}.{ext}")):
+            return f"/static/branding/{name}.{ext}"
     return None
 
 
-@branding_router.get("/")
-async def get_branding():
-    """Público: la página de chat y el widget lo necesitan sin login."""
-    return {"gov_logo_url": _gov_logo_url()}
+def _gov_logo_url() -> Optional[str]:
+    return _branding_logo_url("gov_logo")
 
 
-@branding_router.post("/gov-logo")
-async def upload_gov_logo(file: UploadFile = File(...), payload: dict = Depends(require_role("superadmin"))):
+def _footer_logo_url() -> Optional[str]:
+    return _branding_logo_url("footer_logo")
+
+
+def _remove_branding_logo(name: str) -> None:
+    for ext in GOV_LOGO_EXTS:
+        path = os.path.join(BRANDING_DIR, f"{name}.{ext}")
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError as e:
+                logger.warning("branding_logo_delete_error", path=path, error=str(e))
+
+
+async def _save_branding_logo(name: str, file: UploadFile) -> str:
     content = await file.read()
     if len(content) > MAX_AVATAR_SIZE_BYTES:
         raise HTTPException(413, "Imagen demasiado grande (máx 2MB)")
     ext = _sniff_image_ext(content)
     if not ext:
         raise HTTPException(400, "Formato de imagen no reconocido (usá PNG, JPG, GIF, WEBP o SVG)")
-
     os.makedirs(BRANDING_DIR, exist_ok=True)
-    for old_ext in GOV_LOGO_EXTS:
-        old_path = os.path.join(BRANDING_DIR, f"gov_logo.{old_ext}")
-        if os.path.exists(old_path):
-            try:
-                os.remove(old_path)
-            except OSError as e:
-                logger.warning("gov_logo_delete_error", path=old_path, error=str(e))
-
-    file_path = os.path.join(BRANDING_DIR, f"gov_logo.{ext}")
-    async with aiofiles.open(file_path, "wb") as f:
+    _remove_branding_logo(name)
+    async with aiofiles.open(os.path.join(BRANDING_DIR, f"{name}.{ext}"), "wb") as f:
         await f.write(content)
-    return {"gov_logo_url": f"/static/branding/gov_logo.{ext}"}
+    return f"/static/branding/{name}.{ext}"
+
+
+@branding_router.get("/")
+async def get_branding():
+    """Público: la página de chat y el widget lo necesitan sin login."""
+    return {"gov_logo_url": _gov_logo_url(), "footer_logo_url": _footer_logo_url()}
+
+
+@branding_router.post("/gov-logo")
+async def upload_gov_logo(file: UploadFile = File(...), payload: dict = Depends(require_role("superadmin"))):
+    return {"gov_logo_url": await _save_branding_logo("gov_logo", file)}
 
 
 @branding_router.delete("/gov-logo")
 async def delete_gov_logo(payload: dict = Depends(require_role("superadmin"))):
-    for ext in GOV_LOGO_EXTS:
-        path = os.path.join(BRANDING_DIR, f"gov_logo.{ext}")
-        if os.path.exists(path):
-            try:
-                os.remove(path)
-            except OSError as e:
-                logger.warning("gov_logo_delete_error", path=path, error=str(e))
+    _remove_branding_logo("gov_logo")
+    return {"ok": True}
+
+
+@branding_router.post("/footer-logo")
+async def upload_footer_logo(file: UploadFile = File(...), payload: dict = Depends(require_role("superadmin"))):
+    return {"footer_logo_url": await _save_branding_logo("footer_logo", file)}
+
+
+@branding_router.delete("/footer-logo")
+async def delete_footer_logo(payload: dict = Depends(require_role("superadmin"))):
+    _remove_branding_logo("footer_logo")
     return {"ok": True}
 
 
@@ -616,6 +638,7 @@ async def get_widget_script(bot_id: str, request: Request, key: Optional[str] = 
         "botName": bot.bot_name,
         "botAvatar": bot.bot_avatar_url,  # emoji o path "/static/avatars/..." (relativo a apiUrl)
         "govLogoUrl": _gov_logo_url(),  # path "/static/branding/..." (relativo a apiUrl) o null
+        "footerLogoUrl": _footer_logo_url(),  # logo de Modernización (pie del chat), idem
         "orgLogoUrl": bot.org_logo_url,  # logo del organismo/secretaría dueña de este bot
         "welcomeMessage": bot.welcome_message,
         "primaryColor": widget_config.get("primary_color", "#6c63ff"),
@@ -1007,6 +1030,10 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
            flex-shrink: 0; }}
   #send:hover {{ filter: brightness(1.1); transform: scale(1.05); }}
   #send svg {{ width: 16px; height: 16px; }}
+  /* El logo de Modernización es blanco: va sobre el mismo degradé del header */
+  .footer-logo {{ background: linear-gradient(135deg, var(--color), var(--color2)); padding: 10px 16px;
+                  display: flex; justify-content: center; align-items: center; flex-shrink: 0; }}
+  .footer-logo img {{ max-height: 28px; max-width: 75%; width: auto; object-fit: contain; display: block; }}
 </style>
 </head>
 <body>
@@ -1029,6 +1056,7 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
     </svg>
   </button>
 </div>
+{footer_logo_html}
 <script>
 const API = {api_url_js};
 const BOT_ID = {bot_id_js};
@@ -1159,6 +1187,11 @@ async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db
         f'<img class="gov-logo" src="{html.escape(api_url.rstrip("/") + gov_logo_url)}" alt="Gobierno de Salta">'
         if gov_logo_url else ""
     )
+    footer_logo_url = _footer_logo_url()
+    footer_logo_html = (
+        f'<div class="footer-logo"><img src="{html.escape(api_url.rstrip("/") + footer_logo_url)}" alt="Modernización"></div>'
+        if footer_logo_url else ""
+    )
     org_logo_html = ""
     if bot.org_logo_url:
         org_src = bot.org_logo_url
@@ -1180,6 +1213,7 @@ async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db
         bot_bubble_color=bot_bubble_color,
         avatar=avatar_html,  # ya es HTML seguro (img escapado o texto escapado), no volver a escapar
         gov_logo_html=gov_logo_html,
+        footer_logo_html=footer_logo_html,
         org_logo_html=org_logo_html,
         avatar_js=js_str(avatar_html)[1:-1],  # sin comillas: se inserta dentro de un template literal ya entrecomillado
         api_url_js=js_str(api_url),

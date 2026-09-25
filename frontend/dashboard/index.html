@@ -834,16 +834,26 @@
         <div class="panel-header"><span class="panel-title">Marca institucional</span></div>
         <div class="panel-body">
           <p style="font-size:13px;color:var(--text2);margin-bottom:16px">
-            Logo del Gobierno de Salta — se muestra en el header de <b>todos</b> los bots (junto al avatar
-            propio de cada uno, que sirve como logo del organismo).
+            Logos globales, iguales en <b>todos</b> los bots.
           </p>
-          <div style="display:flex;align-items:center;gap:14px">
+          <div class="form-label">Logo del Gobierno de Salta <span style="color:var(--text3);font-weight:400">— header del chat (junto al avatar propio de cada bot, que sirve como logo del organismo)</span></div>
+          <div style="display:flex;align-items:center;gap:14px;margin-bottom:22px">
             <div id="gov-logo-preview" style="width:64px;height:64px;border-radius:8px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text3);overflow:hidden;flex-shrink:0;text-align:center">Sin logo</div>
             <div>
-              <input type="file" id="gov-logo-file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" style="display:none" onchange="uploadGovLogo()">
+              <input type="file" id="gov-logo-file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" style="display:none" onchange="uploadBrandLogo('gov')">
               <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('gov-logo-file').click()">📷 Subir logo</button>
-              <button type="button" class="btn btn-secondary btn-sm" id="gov-logo-remove-btn" style="display:none" onclick="removeGovLogo()">Quitar</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="gov-logo-remove-btn" style="display:none" onclick="removeBrandLogo('gov')">Quitar</button>
               <div class="form-hint">PNG, JPG, GIF, WEBP o SVG. Máx 2MB.</div>
+            </div>
+          </div>
+          <div class="form-label">Logo de Modernización <span style="color:var(--text3);font-weight:400">— pie del chat (footer), en el widget y en la página de chat</span></div>
+          <div style="display:flex;align-items:center;gap:14px">
+            <div id="footer-logo-preview" style="width:140px;height:64px;border-radius:8px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text3);overflow:hidden;flex-shrink:0;text-align:center">Sin logo</div>
+            <div>
+              <input type="file" id="footer-logo-file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" style="display:none" onchange="uploadBrandLogo('footer')">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('footer-logo-file').click()">📷 Subir logo</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="footer-logo-remove-btn" style="display:none" onclick="removeBrandLogo('footer')">Quitar</button>
+              <div class="form-hint">Conviene un logo apaisado con fondo transparente o blanco. Se muestra de hasta 32px de alto.</div>
             </div>
           </div>
         </div>
@@ -1594,12 +1604,14 @@ async function removeOrgLogo() {
 // ═══════════════════════════════════════════════════════════════
 // MARCA INSTITUCIONAL (logo de Gobierno, global — solo superadmin)
 // ═══════════════════════════════════════════════════════════════
-function renderGovLogoPreview(url) {
-  const preview = document.getElementById('gov-logo-preview');
-  const removeBtn = document.getElementById('gov-logo-remove-btn');
+// kind: 'gov' (header) | 'footer' (Modernización, pie del chat)
+function renderBrandLogoPreview(kind, url) {
+  const preview = document.getElementById(`${kind}-logo-preview`);
+  const removeBtn = document.getElementById(`${kind}-logo-remove-btn`);
   if (url) {
     const src = /^https?:\/\//.test(url) ? url : API_URL + url;
-    preview.innerHTML = `<img src="${escapeHtml(src)}" style="width:100%;height:100%;object-fit:cover">`;
+    const fit = kind === 'footer' ? 'contain' : 'cover';
+    preview.innerHTML = `<img src="${escapeHtml(src)}" style="width:100%;height:100%;object-fit:${fit}">`;
     removeBtn.style.display = '';
   } else {
     preview.textContent = 'Sin logo';
@@ -1610,30 +1622,32 @@ function renderGovLogoPreview(url) {
 async function loadGovLogo() {
   try {
     const data = await api('/api/v1/admin/branding/');
-    renderGovLogoPreview(data.gov_logo_url);
+    renderBrandLogoPreview('gov', data.gov_logo_url);
+    renderBrandLogoPreview('footer', data.footer_logo_url);
   } catch(e) { /* si falla, queda el estado "Sin logo" */ }
 }
 
-async function uploadGovLogo() {
-  const fileInput = document.getElementById('gov-logo-file');
+async function uploadBrandLogo(kind) {
+  const fileInput = document.getElementById(`${kind}-logo-file`);
   const file = fileInput.files[0];
   if (!file) return;
   if (file.size > 2 * 1024 * 1024) { toast('La imagen no puede superar los 2MB', 'error'); fileInput.value = ''; return; }
   const formData = new FormData();
   formData.append('file', file);
   try {
-    const res = await apiUpload('/api/v1/admin/branding/gov-logo', formData);
-    renderGovLogoPreview(res.gov_logo_url);
+    const res = await apiUpload(`/api/v1/admin/branding/${kind}-logo`, formData);
+    renderBrandLogoPreview(kind, res[`${kind}_logo_url`]);
     toast('Logo actualizado', 'success');
   } catch(e) { toast(e.message, 'error'); }
   fileInput.value = '';
 }
 
-async function removeGovLogo() {
-  if (!confirm('¿Quitar el logo del Gobierno de todos los bots?')) return;
+async function removeBrandLogo(kind) {
+  const what = kind === 'footer' ? 'de Modernización' : 'del Gobierno';
+  if (!confirm(`¿Quitar el logo ${what} de todos los bots?`)) return;
   try {
-    await api('/api/v1/admin/branding/gov-logo', 'DELETE');
-    renderGovLogoPreview(null);
+    await api(`/api/v1/admin/branding/${kind}-logo`, 'DELETE');
+    renderBrandLogoPreview(kind, null);
     toast('Logo quitado', 'success');
   } catch(e) { toast(e.message, 'error'); }
 }

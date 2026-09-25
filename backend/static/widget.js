@@ -186,6 +186,12 @@
     #rb-footer { padding: 6px 12px 10px; text-align: center; }
     #rb-footer a { font-size: 10px; color: #ccc; text-decoration: none; }
     #rb-footer a:hover { color: #999; }
+    /* El logo de Modernización es blanco: va sobre el mismo degradé del header */
+    #rb-footer.rb-footer-logo {
+      padding: 9px 12px; display: flex; justify-content: center; align-items: center;
+      background: linear-gradient(135deg, var(--rb-color, #6c63ff), var(--rb-color2, #a78bfa));
+    }
+    #rb-footer-logo { max-height: 26px; max-width: 75%; width: auto; object-fit: contain; display: block; }
   `;
 
   // ─── RAGBot Widget Class ────────────────────────────────────
@@ -201,6 +207,7 @@
         welcomeMessage: config.welcomeMessage || '¡Hola! ¿En qué puedo ayudarte?',
         botAvatar: config.botAvatar || '🤖',
         govLogoUrl: config.govLogoUrl || null,
+        footerLogoUrl: config.footerLogoUrl || null,
         orgLogoUrl: config.orgLogoUrl || null,
         showBranding: config.showBranding !== false,
         apiKey: config.apiKey || null,
@@ -282,7 +289,7 @@
             </button>
           </div>
 
-          ${this.config.showBranding ? '<div id="rb-footer"><a href="#" target="_blank">Powered by RAGBot</a></div>' : ''}
+          ${this._footerHtml()}
         </div>
       `;
       document.body.appendChild(container);
@@ -421,6 +428,16 @@
       const url = this.config.govLogoUrl;
       const src = url.startsWith('/') ? this.config.apiUrl + url : url;
       return `<img id="rb-gov-logo" src="${this._escapeHtml(src)}" alt="Gobierno de Salta">`;
+    }
+
+    // Pie del chat: logo de Modernización si está cargado; si no, el "Powered by" (si showBranding)
+    _footerHtml() {
+      const url = this.config.footerLogoUrl;
+      if (url) {
+        const src = url.startsWith('/') ? this.config.apiUrl + url : url;
+        return `<div id="rb-footer" class="rb-footer-logo"><img id="rb-footer-logo" src="${this._escapeHtml(src)}" alt="Modernización"></div>`;
+      }
+      return this.config.showBranding ? '<div id="rb-footer"><a href="#" target="_blank">Powered by RAGBot</a></div>' : '';
     }
 
     _orgLogoHtml() {
