@@ -2,25 +2,37 @@
 app/api/routers.py — Todos los endpoints FastAPI
 """
 import os
+import re
+import json
+import html
 import uuid
+import asyncio
+import secrets
+import hashlib
 import aiofiles
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
-from sqlalchemy import select, func, update, delete, text
+from sqlalchemy import select, func, update, delete, text, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, EmailStr
 import structlog
 
 from app.db.session import get_db
-from app.models.models import User, Chatbot, Document, DocumentChunk, Conversation, Message, UserRole, DocumentStatus
+from app.services.alert_service import notify_bot_failure
+from app.models.models import (
+    User, Chatbot, Document, DocumentChunk, Conversation, Message,
+    UserRole, DocumentStatus, APIKey, AIProviderConfig, ChatbotAssignment,
+)
 from app.core.security import (
     hash_password, verify_password,
     create_access_token, create_refresh_token, decode_token,
     get_current_user_payload, require_role,
 )
 from app.core.config import settings
+from app.core.net import get_client_ip
+from app.core.crypto import encrypt_secret, decrypt_secret
 from app.services.chat_service import ChatService
 from app.services.rag_service import RAGService
 
@@ -37,6 +49,9 @@ CHAT_HTML_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "fron
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -89,6 +104,21 @@ class UserCreate(BaseModel):
     full_name: Optional[str] = None
     role: UserRole = UserRole.viewer
 
+class APIKeyCreate(BaseModel):
+    name: str = "Default"
+    allowed_origins: Optional[List[str]] = None
+
+class APIKeyUpdate(BaseModel):
+    name: Optional[str] = None
+    allowed_origins: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+
+
+def _hash_api_key(raw_key: str) -> str:
+    # Las API keys ya son secretos de alta entropía generados por el server:
+    # alcanza un hash rápido (a diferencia de las contraseñas, que usan bcrypt).
+    return hashlib.sha256(raw_key.encode()).hexdigest()
+
 
 # ═══════════════════════════════════════════════════════════════
 # AUTH
@@ -117,11 +147,15 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
 
 
 @auth_router.post("/refresh")
-async def refresh_token(refresh_token: str):
-    payload = decode_token(refresh_token)
+async def refresh_token(data: RefreshRequest, db: AsyncSession = Depends(get_db)):
+    # El token va en el body (no en query string) para que no termine en logs/historial del navegador.
+    payload = decode_token(data.refresh_token)
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Token inválido")
-    new_payload = {k: v for k, v in payload.items() if k not in ("exp", "type")}
+    user = await db.get(User, payload.get("sub"))
+    if not user or not user.is_active:
+        raise HTTPException(status_code=401, detail="Usuario inactivo o inexistente")
+    new_payload = {"sub": user.id, "username": user.username, "role": user.role.value}
     return {"access_token": create_access_token(new_payload), "token_type": "bearer"}
 
 
@@ -184,16 +218,43 @@ chatbots_router = APIRouter(prefix="/chatbots", tags=["chatbots"])
 
 
 def _make_slug(name: str) -> str:
-    import re
     slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
     return f"{slug}-{str(uuid.uuid4())[:8]}"
+
+
+# Campos que un usuario asignado (no dueño, no admin/superadmin) puede editar de un bot.
+# El resto (proveedor/modelo de IA, temperatura, is_public, is_active, etc.) queda reservado
+# a admin/superadmin — separa "qué bot puede tocar" (asignación) de "qué le permite su rol".
+ASSIGNEE_EDITABLE_FIELDS = {"description", "system_prompt", "welcome_message", "bot_name", "widget_config"}
+
+
+async def _is_assigned(bot_id: str, user_id: str, db: AsyncSession) -> bool:
+    result = await db.execute(
+        select(ChatbotAssignment.id)
+        .where(ChatbotAssignment.chatbot_id == bot_id, ChatbotAssignment.user_id == user_id)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def _get_owned_chatbot(bot_id: str, payload: dict, db: AsyncSession) -> Chatbot:
+    """Devuelve el chatbot si el usuario es superadmin/admin, su dueño, o tiene una asignación
+    puntual sobre ese bot; 404 en caso contrario (para no revelar bots de otros usuarios)."""
+    bot = await db.get(Chatbot, bot_id)
+    if not bot:
+        raise HTTPException(404, "Chatbot no encontrado")
+    if payload["role"] in ("superadmin", "admin") or bot.owner_id == payload["sub"]:
+        return bot
+    if await _is_assigned(bot_id, payload["sub"], db):
+        return bot
+    raise HTTPException(404, "Chatbot no encontrado")
 
 
 @chatbots_router.get("/")
 async def list_chatbots(payload: dict = Depends(get_current_user_payload), db: AsyncSession = Depends(get_db)):
     query = select(Chatbot)
     if payload["role"] not in ("superadmin", "admin"):
-        query = query.where(Chatbot.owner_id == payload["sub"])
+        assigned_ids = select(ChatbotAssignment.chatbot_id).where(ChatbotAssignment.user_id == payload["sub"])
+        query = query.where(or_(Chatbot.owner_id == payload["sub"], Chatbot.id.in_(assigned_ids)))
     result = await db.execute(query.order_by(Chatbot.created_at.desc()))
     bots = result.scalars().all()
     return [{"id": b.id, "name": b.name, "slug": b.slug, "is_active": b.is_active,
@@ -213,9 +274,7 @@ async def create_chatbot(data: ChatbotCreate, payload: dict = Depends(require_ro
 
 @chatbots_router.get("/{bot_id}")
 async def get_chatbot(bot_id: str, payload: dict = Depends(get_current_user_payload), db: AsyncSession = Depends(get_db)):
-    bot = await db.get(Chatbot, bot_id)
-    if not bot:
-        raise HTTPException(404, "Chatbot no encontrado")
+    bot = await _get_owned_chatbot(bot_id, payload, db)
     return {
         "id": bot.id, "name": bot.name, "slug": bot.slug,
         "description": bot.description, "is_active": bot.is_active,
@@ -223,7 +282,7 @@ async def get_chatbot(bot_id: str, payload: dict = Depends(get_current_user_payl
         "ai_provider": bot.ai_provider.value, "ai_model": bot.ai_model,
         "temperature": bot.temperature, "max_tokens": bot.max_tokens,
         "system_prompt": bot.system_prompt, "welcome_message": bot.welcome_message,
-        "bot_name": bot.bot_name, "bot_avatar_url": bot.bot_avatar_url,
+        "bot_name": bot.bot_name, "bot_avatar_url": bot.bot_avatar_url, "org_logo_url": bot.org_logo_url,
         "widget_config": bot.widget_config, "top_k": bot.top_k,
         "similarity_threshold": bot.similarity_threshold,
         "total_conversations": bot.total_conversations,
@@ -234,11 +293,15 @@ async def get_chatbot(bot_id: str, payload: dict = Depends(get_current_user_payl
 
 
 @chatbots_router.patch("/{bot_id}")
-async def update_chatbot(bot_id: str, data: ChatbotUpdate, payload: dict = Depends(require_role("admin")), db: AsyncSession = Depends(get_db)):
-    bot = await db.get(Chatbot, bot_id)
-    if not bot:
-        raise HTTPException(404, "No encontrado")
-    for k, v in data.model_dump(exclude_none=True).items():
+async def update_chatbot(bot_id: str, data: ChatbotUpdate, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    bot = await _get_owned_chatbot(bot_id, payload, db)
+    updates = data.model_dump(exclude_none=True)
+    is_admin_or_owner = payload["role"] in ("superadmin", "admin") or bot.owner_id == payload["sub"]
+    if not is_admin_or_owner:
+        disallowed = set(updates) - ASSIGNEE_EDITABLE_FIELDS
+        if disallowed:
+            raise HTTPException(403, f"No tenés permiso para editar: {', '.join(sorted(disallowed))}")
+    for k, v in updates.items():
         setattr(bot, k, v)
     await db.commit()
     return {"ok": True}
@@ -246,29 +309,249 @@ async def update_chatbot(bot_id: str, data: ChatbotUpdate, payload: dict = Depen
 
 @chatbots_router.delete("/{bot_id}")
 async def delete_chatbot(bot_id: str, payload: dict = Depends(require_role("admin")), db: AsyncSession = Depends(get_db)):
-    bot = await db.get(Chatbot, bot_id)
-    if not bot:
-        raise HTTPException(404, "No encontrado")
+    bot = await _get_owned_chatbot(bot_id, payload, db)
     await db.delete(bot)
+    await db.commit()
+    _delete_bot_image(bot_id, AVATARS_DIR)
+    _delete_bot_image(bot_id, ORG_LOGOS_DIR)
+    return {"ok": True}
+
+
+# ─── Asignaciones (qué usuarios, además del dueño, tienen acceso a este bot) ───
+
+class AssignmentCreate(BaseModel):
+    user_id: str
+
+
+@chatbots_router.get("/{bot_id}/assignments")
+async def list_assignments(bot_id: str, payload: dict = Depends(require_role("admin")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    result = await db.execute(
+        select(User, ChatbotAssignment.id.label("assignment_id"))
+        .join(ChatbotAssignment, ChatbotAssignment.user_id == User.id)
+        .where(ChatbotAssignment.chatbot_id == bot_id)
+        .order_by(User.username)
+    )
+    return [{"assignment_id": a_id, "user_id": u.id, "username": u.username,
+             "email": u.email, "role": u.role.value} for u, a_id in result.all()]
+
+
+@chatbots_router.post("/{bot_id}/assignments", status_code=201)
+async def create_assignment(bot_id: str, data: AssignmentCreate, payload: dict = Depends(require_role("admin")), db: AsyncSession = Depends(get_db)):
+    bot = await _get_owned_chatbot(bot_id, payload, db)
+    user = await db.get(User, data.user_id)
+    if not user:
+        raise HTTPException(404, "Usuario no encontrado")
+    if user.id == bot.owner_id:
+        raise HTTPException(409, "Ese usuario ya es el dueño del bot")
+    existing = await _is_assigned(bot_id, data.user_id, db)
+    if existing:
+        raise HTTPException(409, "Ese usuario ya tiene acceso a este bot")
+    assignment = ChatbotAssignment(chatbot_id=bot_id, user_id=data.user_id)
+    db.add(assignment)
     await db.commit()
     return {"ok": True}
 
 
+@chatbots_router.delete("/{bot_id}/assignments/{user_id}")
+async def delete_assignment(bot_id: str, user_id: str, payload: dict = Depends(require_role("admin")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    result = await db.execute(
+        select(ChatbotAssignment).where(ChatbotAssignment.chatbot_id == bot_id, ChatbotAssignment.user_id == user_id)
+    )
+    assignment = result.scalar_one_or_none()
+    if not assignment:
+        raise HTTPException(404, "Asignación no encontrada")
+    await db.delete(assignment)
+    await db.commit()
+    return {"ok": True}
+
+
+# ─── Avatar del bot (imagen usada en el widget y la página de chat) ───
+
+AVATAR_EXT_BY_MAGIC = {
+    b"\x89PNG\r\n\x1a\n": "png",
+    b"\xff\xd8\xff": "jpg",
+    b"GIF87a": "gif",
+    b"GIF89a": "gif",
+}
+MAX_AVATAR_SIZE_BYTES = 2 * 1024 * 1024  # 2MB
+AVATARS_DIR = os.path.join("static", "avatars")
+ORG_LOGOS_DIR = os.path.join("static", "org_logos")
+
+
+IMAGE_EXTS = ("png", "jpg", "gif", "webp", "svg")
+
+
+def _sniff_image_ext(content: bytes) -> Optional[str]:
+    """Detecta el tipo real de imagen por sus primeros bytes — no confía en el
+    Content-Type declarado por el cliente (trivial de falsificar)."""
+    for magic, ext in AVATAR_EXT_BY_MAGIC.items():
+        if content.startswith(magic):
+            return ext
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "webp"
+    # SVG es texto XML, no tiene bytes mágicos fijos — se detecta buscando la etiqueta <svg.
+    # Servido siempre vía <img src="...">, el navegador nunca ejecuta <script> dentro de un SVG así.
+    if b"<svg" in content[:1024].lower():
+        return "svg"
+    return None
+
+
+def _image_paths(directory: str, base_name: str):
+    return [os.path.join(directory, f"{base_name}.{ext}") for ext in IMAGE_EXTS]
+
+
+def _avatar_paths(bot_id: str):
+    return _image_paths(AVATARS_DIR, bot_id)
+
+
+async def _upload_bot_image(bot_id: str, file: UploadFile, directory: str, url_prefix: str, payload: dict, db: AsyncSession) -> str:
+    """Valida y guarda una imagen asociada a un bot (avatar u logo de organismo),
+    con nombre fijo por bot_id (pisa la anterior, sin acumular basura)."""
+    content = await file.read()
+    if len(content) > MAX_AVATAR_SIZE_BYTES:
+        raise HTTPException(413, "Imagen demasiado grande (máx 2MB)")
+    ext = _sniff_image_ext(content)
+    if not ext:
+        raise HTTPException(400, "Formato de imagen no reconocido (usá PNG, JPG, GIF, WEBP o SVG)")
+
+    os.makedirs(directory, exist_ok=True)
+    for old_path in _image_paths(directory, bot_id):
+        if os.path.exists(old_path):
+            try:
+                os.remove(old_path)
+            except OSError as e:
+                logger.warning("bot_image_delete_error", path=old_path, error=str(e))
+
+    file_path = os.path.join(directory, f"{bot_id}.{ext}")
+    async with aiofiles.open(file_path, "wb") as f:
+        await f.write(content)
+    return f"{url_prefix}/{bot_id}.{ext}"
+
+
+def _delete_bot_image(bot_id: str, directory: str) -> None:
+    for path in _image_paths(directory, bot_id):
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError as e:
+                logger.warning("bot_image_delete_error", path=path, error=str(e))
+
+
+@chatbots_router.post("/{bot_id}/avatar")
+async def upload_bot_avatar(bot_id: str, file: UploadFile = File(...), payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    bot = await _get_owned_chatbot(bot_id, payload, db)
+    bot.bot_avatar_url = await _upload_bot_image(bot_id, file, AVATARS_DIR, "/static/avatars", payload, db)
+    await db.commit()
+    return {"avatar_url": bot.bot_avatar_url}
+
+
+@chatbots_router.delete("/{bot_id}/avatar")
+async def delete_bot_avatar(bot_id: str, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    bot = await _get_owned_chatbot(bot_id, payload, db)
+    _delete_bot_image(bot_id, AVATARS_DIR)
+    bot.bot_avatar_url = None
+    await db.commit()
+    return {"ok": True}
+
+
+@chatbots_router.post("/{bot_id}/org-logo")
+async def upload_org_logo(bot_id: str, file: UploadFile = File(...), payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    bot = await _get_owned_chatbot(bot_id, payload, db)
+    bot.org_logo_url = await _upload_bot_image(bot_id, file, ORG_LOGOS_DIR, "/static/org_logos", payload, db)
+    await db.commit()
+    return {"org_logo_url": bot.org_logo_url}
+
+
+@chatbots_router.delete("/{bot_id}/org-logo")
+async def delete_org_logo(bot_id: str, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    bot = await _get_owned_chatbot(bot_id, payload, db)
+    _delete_bot_image(bot_id, ORG_LOGOS_DIR)
+    bot.org_logo_url = None
+    await db.commit()
+    return {"ok": True}
+
+
+# ─── Marca institucional global (logo del Gobierno, igual en todos los bots) ───
+
+branding_router = APIRouter(prefix="/admin/branding", tags=["branding"])
+BRANDING_DIR = os.path.join("static", "branding")
+GOV_LOGO_EXTS = IMAGE_EXTS
+
+
+def _gov_logo_url() -> Optional[str]:
+    for ext in GOV_LOGO_EXTS:
+        if os.path.exists(os.path.join(BRANDING_DIR, f"gov_logo.{ext}")):
+            return f"/static/branding/gov_logo.{ext}"
+    return None
+
+
+@branding_router.get("/")
+async def get_branding():
+    """Público: la página de chat y el widget lo necesitan sin login."""
+    return {"gov_logo_url": _gov_logo_url()}
+
+
+@branding_router.post("/gov-logo")
+async def upload_gov_logo(file: UploadFile = File(...), payload: dict = Depends(require_role("superadmin"))):
+    content = await file.read()
+    if len(content) > MAX_AVATAR_SIZE_BYTES:
+        raise HTTPException(413, "Imagen demasiado grande (máx 2MB)")
+    ext = _sniff_image_ext(content)
+    if not ext:
+        raise HTTPException(400, "Formato de imagen no reconocido (usá PNG, JPG, GIF, WEBP o SVG)")
+
+    os.makedirs(BRANDING_DIR, exist_ok=True)
+    for old_ext in GOV_LOGO_EXTS:
+        old_path = os.path.join(BRANDING_DIR, f"gov_logo.{old_ext}")
+        if os.path.exists(old_path):
+            try:
+                os.remove(old_path)
+            except OSError as e:
+                logger.warning("gov_logo_delete_error", path=old_path, error=str(e))
+
+    file_path = os.path.join(BRANDING_DIR, f"gov_logo.{ext}")
+    async with aiofiles.open(file_path, "wb") as f:
+        await f.write(content)
+    return {"gov_logo_url": f"/static/branding/gov_logo.{ext}"}
+
+
+@branding_router.delete("/gov-logo")
+async def delete_gov_logo(payload: dict = Depends(require_role("superadmin"))):
+    for ext in GOV_LOGO_EXTS:
+        path = os.path.join(BRANDING_DIR, f"gov_logo.{ext}")
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError as e:
+                logger.warning("gov_logo_delete_error", path=path, error=str(e))
+    return {"ok": True}
+
+
 @chatbots_router.get("/{bot_id}/widget.js")
-async def get_widget_script(bot_id: str, db: AsyncSession = Depends(get_db)):
+async def get_widget_script(bot_id: str, key: Optional[str] = None, db: AsyncSession = Depends(get_db)):
     bot = await db.get(Chatbot, bot_id)
-    if not bot or not bot.is_active:
+    if not bot or not bot.is_active or not bot.is_public:
         raise HTTPException(404, "Bot no disponible")
-    config = bot.widget_config or {}
+    widget_config = bot.widget_config or {}
+    # json.dumps escapa comillas, backslashes y </script — evita romper el contexto JS
+    # con datos configurados por el admin del bot (bot_name, welcome_message, etc.)
+    config_json = json.dumps({
+        "botId": bot_id,
+        "botName": bot.bot_name,
+        "botAvatar": bot.bot_avatar_url,  # emoji o path "/static/avatars/..." (relativo a apiUrl)
+        "govLogoUrl": _gov_logo_url(),  # path "/static/branding/..." (relativo a apiUrl) o null
+        "orgLogoUrl": bot.org_logo_url,  # logo del organismo/secretaría dueña de este bot
+        "welcomeMessage": bot.welcome_message,
+        "primaryColor": widget_config.get("primary_color", "#6c63ff"),
+        "secondaryColor": widget_config.get("secondary_color", "#a78bfa"),
+        "position": widget_config.get("position", "bottom-right"),
+        "apiKey": key,  # si el bot tiene API keys activas, esta se manda como X-API-Key en cada mensaje
+    }).replace("</", "<\\/")
     script = f"""(function(){{
-  var config = {{
-    botId: "{bot_id}",
-    botName: "{bot.bot_name}",
-    welcomeMessage: "{bot.welcome_message}",
-    primaryColor: "{config.get('primary_color', '#6c63ff')}",
-    position: "{config.get('position', 'bottom-right')}",
-    apiUrl: window.RAGBOT_API_URL || "http://localhost:8040"
-  }};
+  var config = {config_json};
+  config.apiUrl = window.RAGBOT_API_URL || "http://localhost:8040";
   var s = document.createElement('script');
   s.src = config.apiUrl + '/static/widget.js';
   s.onload = function(){{ window.RAGBot.init(config); }};
@@ -276,6 +559,213 @@ async def get_widget_script(bot_id: str, db: AsyncSession = Depends(get_db)):
 }})();"""
     from fastapi.responses import Response
     return Response(content=script, media_type="application/javascript")
+
+
+# ═══════════════════════════════════════════════════════════════
+# API KEYS — restringen el chat público por origen/dominio (opcional)
+# ═══════════════════════════════════════════════════════════════
+
+api_keys_router = APIRouter(prefix="/chatbots/{bot_id}/api-keys", tags=["api-keys"])
+
+
+@api_keys_router.get("/")
+async def list_api_keys(bot_id: str, payload: dict = Depends(require_role("admin")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    result = await db.execute(select(APIKey).where(APIKey.chatbot_id == bot_id).order_by(APIKey.created_at.desc()))
+    keys = result.scalars().all()
+    return [{"id": k.id, "name": k.name, "allowed_origins": k.allowed_origins or [],
+             "is_active": k.is_active, "requests_count": k.requests_count,
+             "last_used": k.last_used.isoformat() if k.last_used else None,
+             "created_at": k.created_at.isoformat()} for k in keys]
+
+
+@api_keys_router.post("/", status_code=201)
+async def create_api_key(bot_id: str, data: APIKeyCreate, payload: dict = Depends(require_role("admin")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    raw_key = f"rbk_{secrets.token_urlsafe(32)}"
+    key = APIKey(chatbot_id=bot_id, key_hash=_hash_api_key(raw_key), name=data.name,
+                 allowed_origins=data.allowed_origins or None)
+    db.add(key)
+    await db.commit()
+    await db.refresh(key)
+    return {"id": key.id, "name": key.name, "allowed_origins": key.allowed_origins or [],
+            "api_key": raw_key}  # única vez que se devuelve el valor en texto plano
+
+
+@api_keys_router.patch("/{key_id}")
+async def update_api_key(bot_id: str, key_id: str, data: APIKeyUpdate, payload: dict = Depends(require_role("admin")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    key = await db.get(APIKey, key_id)
+    if not key or key.chatbot_id != bot_id:
+        raise HTTPException(404, "API key no encontrada")
+    for k, v in data.model_dump(exclude_none=True).items():
+        setattr(key, k, v)
+    await db.commit()
+    return {"ok": True}
+
+
+@api_keys_router.delete("/{key_id}")
+async def delete_api_key(bot_id: str, key_id: str, payload: dict = Depends(require_role("admin")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    key = await db.get(APIKey, key_id)
+    if not key or key.chatbot_id != bot_id:
+        raise HTTPException(404, "API key no encontrada")
+    await db.delete(key)
+    await db.commit()
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════
+# AI PROVIDERS — API keys globales por proveedor + caché de modelos
+# ═══════════════════════════════════════════════════════════════
+
+ai_providers_router = APIRouter(prefix="/admin/ai-providers", tags=["ai-providers"])
+
+# Fallback curado: se usa si nunca se hizo un "actualizar modelos" (o si falla)
+CURATED_MODELS = {
+    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+    "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-haiku-20240307", "claude-3-opus-20240229"],
+    "google": ["gemini-2.5-flash-lite", "gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"],
+    "ollama": ["llama3", "llama3:70b", "mistral", "mixtral", "codellama"],
+}
+
+_ENV_API_KEYS = {
+    "openai": lambda: settings.OPENAI_API_KEY,
+    "anthropic": lambda: settings.ANTHROPIC_API_KEY,
+    "google": lambda: settings.GOOGLE_API_KEY,
+}
+
+
+class ProviderConfigUpdate(BaseModel):
+    api_key: Optional[str] = None   # "" para borrar la key guardada y volver a usar la de .env
+    base_url: Optional[str] = None  # usado por Ollama
+
+
+async def _get_provider_config(provider: str, db: AsyncSession) -> Optional[AIProviderConfig]:
+    result = await db.execute(select(AIProviderConfig).where(AIProviderConfig.provider == provider))
+    return result.scalar_one_or_none()
+
+
+async def _get_or_create_provider_config(provider: str, db: AsyncSession) -> AIProviderConfig:
+    cfg = await _get_provider_config(provider, db)
+    if not cfg:
+        cfg = AIProviderConfig(provider=provider)
+        db.add(cfg)
+        await db.flush()
+    return cfg
+
+
+def _resolve_provider_key(provider: str, cfg: Optional[AIProviderConfig]) -> str:
+    if cfg and cfg.api_key_encrypted:
+        return decrypt_secret(cfg.api_key_encrypted)
+    getter = _ENV_API_KEYS.get(provider)
+    return getter() if getter else ""
+
+
+async def _fetch_live_models(provider: str, api_key: str, base_url: Optional[str] = None) -> List[str]:
+    if provider == "openai":
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=api_key)
+        resp = await client.models.list()
+        return sorted({m.id for m in resp.data if "gpt" in m.id or m.id.startswith(("o1", "o3", "o4"))})
+
+    if provider == "anthropic":
+        import httpx
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://api.anthropic.com/v1/models",
+                headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        return [m["id"] for m in data.get("data", [])]
+
+    if provider == "google":
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+
+        def _list():
+            return [
+                m.name.replace("models/", "")
+                for m in genai.list_models()
+                if "generateContent" in getattr(m, "supported_generation_methods", [])
+            ]
+        return sorted(set(await asyncio.to_thread(_list)))
+
+    if provider == "ollama":
+        import httpx
+        url = (base_url or settings.OLLAMA_BASE_URL).rstrip("/")
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(f"{url}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
+        return [m["name"] for m in data.get("models", [])]
+
+    raise ValueError(f"Proveedor desconocido: {provider}")
+
+
+@ai_providers_router.get("/")
+async def list_ai_providers(payload: dict = Depends(require_role("superadmin")), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(AIProviderConfig))
+    configs = {c.provider.value: c for c in result.scalars().all()}
+    out = []
+    for provider in CURATED_MODELS:
+        cfg = configs.get(provider)
+        has_db_key = bool(cfg and cfg.api_key_encrypted)
+        has_env_key = bool(_ENV_API_KEYS.get(provider, lambda: "")())
+        out.append({
+            "provider": provider,
+            "configured": has_db_key or has_env_key or provider == "ollama",
+            "key_source": "db" if has_db_key else ("env" if has_env_key else None),
+            "base_url": (cfg.base_url if cfg else None) or (settings.OLLAMA_BASE_URL if provider == "ollama" else None),
+            "models": (cfg.models if cfg and cfg.models else None) or CURATED_MODELS[provider],
+            "models_source": "cached" if (cfg and cfg.models) else "curated",
+            "models_updated_at": cfg.models_updated_at.isoformat() if cfg and cfg.models_updated_at else None,
+        })
+    return out
+
+
+@ai_providers_router.put("/{provider}")
+async def update_ai_provider(provider: str, data: ProviderConfigUpdate, payload: dict = Depends(require_role("superadmin")), db: AsyncSession = Depends(get_db)):
+    if provider not in CURATED_MODELS:
+        raise HTTPException(404, "Proveedor desconocido")
+    cfg = await _get_or_create_provider_config(provider, db)
+    if data.api_key is not None:
+        cfg.api_key_encrypted = encrypt_secret(data.api_key) if data.api_key else None
+    if data.base_url is not None:
+        cfg.base_url = data.base_url or None
+    await db.commit()
+    return {"ok": True}
+
+
+@ai_providers_router.post("/{provider}/refresh-models")
+async def refresh_provider_models(provider: str, payload: dict = Depends(require_role("superadmin")), db: AsyncSession = Depends(get_db)):
+    if provider not in CURATED_MODELS:
+        raise HTTPException(404, "Proveedor desconocido")
+    cfg = await _get_or_create_provider_config(provider, db)
+    api_key = _resolve_provider_key(provider, cfg)
+    if provider != "ollama" and not api_key:
+        raise HTTPException(400, "Configurá una API key para este proveedor antes de actualizar los modelos")
+    try:
+        models = await _fetch_live_models(provider, api_key, cfg.base_url)
+    except Exception as e:
+        logger.warning("ai_provider_refresh_failed", provider=provider, error=str(e))
+        raise HTTPException(502, f"No se pudo consultar el proveedor: {e}")
+    if not models:
+        raise HTTPException(502, "El proveedor no devolvió ningún modelo")
+    cfg.models = models
+    cfg.models_updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"provider": provider, "models": models, "models_updated_at": cfg.models_updated_at.isoformat()}
+
+
+@ai_providers_router.get("/{provider}/models")
+async def get_provider_models(provider: str, payload: dict = Depends(require_role("admin")), db: AsyncSession = Depends(get_db)):
+    if provider not in CURATED_MODELS:
+        raise HTTPException(404, "Proveedor desconocido")
+    cfg = await _get_provider_config(provider, db)
+    models = (cfg.models if cfg and cfg.models else None) or CURATED_MODELS[provider]
+    return {"provider": provider, "models": models, "source": "cached" if (cfg and cfg.models) else "curated"}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -292,12 +782,19 @@ ALLOWED_MIMES = {
 
 @documents_router.get("/")
 async def list_documents(bot_id: str, payload: dict = Depends(get_current_user_payload), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
     result = await db.execute(select(Document).where(Document.chatbot_id == bot_id).order_by(Document.created_at.desc()))
     docs = result.scalars().all()
     return [{"id": d.id, "filename": d.original_filename, "status": d.status.value,
              "chunk_count": d.chunk_count, "page_count": d.page_count,
              "file_size": d.file_size, "created_at": d.created_at.isoformat(),
              "error_message": d.error_message} for d in docs]
+
+
+def _safe_filename(name: str) -> str:
+    """Aísla solo el nombre de archivo, sin componentes de ruta (evita path traversal)."""
+    name = os.path.basename((name or "").replace("\\", "_")).lstrip(".")
+    return name or "documento"
 
 
 @documents_router.post("/", status_code=202)
@@ -307,14 +804,18 @@ async def upload_document(
     payload: dict = Depends(require_role("operator")),
     db: AsyncSession = Depends(get_db),
 ):
+    await _get_owned_chatbot(bot_id, payload, db)
     if file.content_type not in ALLOWED_MIMES:
         raise HTTPException(400, f"Tipo no permitido: {file.content_type}")
     content = await file.read()
     if len(content) > settings.max_file_size_bytes:
         raise HTTPException(413, f"Archivo demasiado grande (máx {settings.MAX_FILE_SIZE_MB}MB)")
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-    safe_name = f"{uuid.uuid4()}_{file.filename}"
+    upload_dir_abs = os.path.abspath(settings.UPLOAD_DIR)
+    safe_name = f"{uuid.uuid4()}_{_safe_filename(file.filename)}"
     file_path = os.path.join(settings.UPLOAD_DIR, safe_name)
+    if os.path.dirname(os.path.abspath(file_path)) != upload_dir_abs:
+        raise HTTPException(400, "Nombre de archivo inválido")
     async with aiofiles.open(file_path, "wb") as f:
         await f.write(content)
     doc = Document(chatbot_id=bot_id, filename=safe_name,
@@ -338,8 +839,9 @@ async def _process_doc_background(document_id: str):
 
 @documents_router.delete("/{doc_id}")
 async def delete_document(bot_id: str, doc_id: str, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
     doc = await db.get(Document, doc_id)
-    if not doc:
+    if not doc or doc.chatbot_id != bot_id:
         raise HTTPException(404, "Documento no encontrado")
     await db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == doc_id))
     if os.path.exists(doc.file_path):
@@ -369,9 +871,11 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
   body {{ font-family: 'Segoe UI', system-ui, sans-serif; background: #f8f8fc;
          height: 100vh; display: flex; flex-direction: column; overflow: hidden; }}
-  :root {{ --color: {primary_color}; }}
-  .header {{ background: var(--color); color: #fff; padding: 14px 20px;
+  :root {{ --color: {primary_color}; --color2: {secondary_color}; }}
+  .header {{ background: linear-gradient(135deg, var(--color), var(--color2)); color: #fff; padding: 14px 20px;
              display: flex; align-items: center; gap: 12px; flex-shrink: 0; }}
+  .gov-logo {{ height: 30px; width: auto; border-radius: 4px; flex-shrink: 0; }}
+  .org-logo {{ height: 30px; width: auto; border-radius: 4px; flex-shrink: 0; }}
   .avatar {{ width: 38px; height: 38px; border-radius: 50%;
              background: rgba(255,255,255,0.2);
              display: flex; align-items: center; justify-content: center; font-size: 20px; }}
@@ -389,7 +893,7 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
   .msg.user .msg-av {{ background: #e8e8f5; color: #555; }}
   .bubble {{ max-width: 72%; padding: 11px 15px; border-radius: 18px;
              font-size: 14px; line-height: 1.5; }}
-  .msg.bot .bubble {{ background: #fff; border-bottom-left-radius: 4px; color: #1a1a2e;
+  .msg.bot .bubble {{ background: {bot_bubble_color}; border-bottom-left-radius: 4px; color: #1a1a2e;
                       box-shadow: 0 1px 4px rgba(0,0,0,0.07); }}
   .msg.user .bubble {{ background: var(--color); color: #fff; border-bottom-right-radius: 4px; }}
   .sources {{ margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; }}
@@ -418,23 +922,19 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
            flex-shrink: 0; }}
   #send:hover {{ filter: brightness(1.1); transform: scale(1.05); }}
   #send svg {{ width: 16px; height: 16px; }}
-  .welcome {{ background: linear-gradient(135deg, var(--color), #a78bfa);
-              border-radius: 14px; padding: 18px; color: #fff; }}
-  .welcome h2 {{ font-size: 16px; margin-bottom: 4px; }}
-  .welcome p {{ font-size: 13px; opacity: 0.85; }}
 </style>
 </head>
 <body>
 <div class="header">
+  {gov_logo_html}
+  {org_logo_html}
   <div class="avatar">{avatar}</div>
   <div class="header-info">
     <h1>{bot_name}</h1>
     <p>● En línea</p>
   </div>
 </div>
-<div class="messages" id="msgs">
-  <div class="welcome"><h2>{bot_name}</h2><p>Pregúntame sobre los documentos disponibles</p></div>
-</div>
+<div class="messages" id="msgs"></div>
 <div class="input-area">
   <textarea id="inp" placeholder="Escribe tu mensaje..." rows="1" maxlength="2000"></textarea>
   <button id="send">
@@ -445,26 +945,33 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
   </button>
 </div>
 <script>
-const API = "{api_url}";
-const BOT_ID = "{bot_id}";
+const API = {api_url_js};
+const BOT_ID = {bot_id_js};
+const API_KEY = {api_key_js};
 const SESSION = "pg_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
 let busy = false;
+
+function esc(s) {{
+  return String(s ?? "").replace(/[&<>"']/g, c => (
+    {{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}}[c]
+  ));
+}}
 
 function addMsg(role, content, sources) {{
   const m = document.getElementById("msgs");
   const time = new Date().toLocaleTimeString("es", {{hour:"2-digit",minute:"2-digit"}});
-  const srcs = (sources||[]).map(s=>`<span class="src">📎 ${{s}}</span>`).join("");
+  const srcs = (sources||[]).map(s=>`<span class="src">📎 ${{esc(s)}}</span>`).join("");
   const d = document.createElement("div");
   d.className = "msg " + role;
-  d.innerHTML = `<div class="msg-av">${{role==="bot"?"{avatar}":"👤"}}</div>
-    <div><div class="bubble">${{content.replace(/\\n/g,"<br>")}}${{srcs?`<div class="sources">${{srcs}}</div>`:""}}</div>
+  d.innerHTML = `<div class="msg-av">${{role==="bot"?"{avatar_js}":"👤"}}</div>
+    <div><div class="bubble">${{esc(content).replace(/\\n/g,"<br>")}}${{srcs?`<div class="sources">${{srcs}}</div>`:""}}</div>
     <div class="msg-time">${{time}}</div></div>`;
   m.appendChild(d);
   m.scrollTop = m.scrollHeight;
 }}
 
 // Mensaje de bienvenida
-addMsg("bot", "{welcome_message}");
+addMsg("bot", {welcome_message_js});
 
 async function send() {{
   const inp = document.getElementById("inp");
@@ -476,12 +983,14 @@ async function send() {{
   const m = document.getElementById("msgs");
   const t = document.createElement("div");
   t.id = "typing"; t.className = "msg bot";
-  t.innerHTML = `<div class="msg-av">{avatar}</div><div class="typing"><span></span><span></span><span></span></div>`;
+  t.innerHTML = `<div class="msg-av">{avatar_js}</div><div class="typing"><span></span><span></span><span></span></div>`;
   m.appendChild(t); m.scrollTop = m.scrollHeight;
   busy = true;
   try {{
+    const headers = {{"Content-Type": "application/json"}};
+    if (API_KEY) headers["X-API-Key"] = API_KEY;
     const res = await fetch(`${{API}}/api/v1/chat/${{BOT_ID}}`, {{
-      method: "POST", headers: {{"Content-Type": "application/json"}},
+      method: "POST", headers,
       body: JSON.stringify({{message: txt, session_id: SESSION}})
     }});
     const data = await res.json();
@@ -507,29 +1016,113 @@ document.getElementById("inp").addEventListener("input", function() {{
 </html>"""
 
 
+def _tint_hex(hex_color: str, amount: float = 0.85) -> str:
+    """Mezcla un color hex con blanco (amount=1 -> blanco puro) para un tono pastel
+    siempre legible con texto oscuro, sin importar cuán saturado sea el color original."""
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        return "#f5f5f8"
+    try:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        return "#f5f5f8"
+    mix = lambda c: round(c + (255 - c) * amount)
+    return f"#{mix(r):02x}{mix(g):02x}{mix(b):02x}"
+
+
+def _avatar_html(avatar_value: str, api_url: str) -> str:
+    """HTML seguro para el avatar: <img> si es una URL/path de imagen subida, o el
+    emoji/texto escapado si no. Nunca vuelca el valor crudo sin escapar."""
+    if avatar_value.startswith(("http://", "https://")):
+        src = avatar_value
+    elif avatar_value.startswith("/"):
+        src = api_url.rstrip("/") + avatar_value
+    else:
+        return html.escape(avatar_value)
+    return f'<img src="{html.escape(src)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;display:block">'
+
+
 @chat_router.get("/{bot_id}", response_class=HTMLResponse)
-async def chat_page(bot_id: str, db: AsyncSession = Depends(get_db)):
+async def chat_page(bot_id: str, key: Optional[str] = None, db: AsyncSession = Depends(get_db)):
     """Sirve la página HTML del chat — usada por iframe y 'Abrir en nueva pestaña'."""
     bot = await db.get(Chatbot, bot_id)
-    if not bot or not bot.is_active:
+    if not bot or not bot.is_active or not bot.is_public:
         raise HTTPException(404, "Bot no encontrado o inactivo")
 
     config = bot.widget_config or {}
     primary_color = config.get("primary_color", "#6c63ff")
+    if not re.fullmatch(r"#[0-9a-fA-F]{3,8}", primary_color or ""):
+        primary_color = "#6c63ff"  # valor libre en config solo se usa dentro de <style>; validar como color
+    secondary_color = config.get("secondary_color", "#a78bfa")
+    if not re.fullmatch(r"#[0-9a-fA-F]{3,8}", secondary_color or ""):
+        secondary_color = "#a78bfa"
+    bot_bubble_color = _tint_hex(secondary_color, 0.85)
     avatar = bot.bot_avatar_url or "🤖"
     # Detectar la URL del API desde el request o usar la configurada
     api_url = config.get("api_url", "http://localhost:8040")
-
-    html = CHAT_PAGE_TEMPLATE.format(
-        bot_id=bot_id,
-        bot_name=bot.bot_name or bot.name,
-        welcome_message=(bot.welcome_message or "¡Hola! ¿En qué puedo ayudarte?")
-                         .replace('"', '\\"').replace('\n', '\\n'),
-        primary_color=primary_color,
-        avatar=avatar,
-        api_url=api_url,
+    avatar_html = _avatar_html(avatar, api_url)
+    gov_logo_url = _gov_logo_url()
+    gov_logo_html = (
+        f'<img class="gov-logo" src="{html.escape(api_url.rstrip("/") + gov_logo_url)}" alt="Gobierno de Salta">'
+        if gov_logo_url else ""
     )
-    return HTMLResponse(content=html)
+    org_logo_html = ""
+    if bot.org_logo_url:
+        org_src = bot.org_logo_url
+        if org_src.startswith("/"):
+            org_src = api_url.rstrip("/") + org_src
+        org_logo_html = f'<img class="org-logo" src="{html.escape(org_src)}" alt="Logo del organismo">'
+
+    def js_str(value: str) -> str:
+        # Literal JS seguro (comillas incluidas): escapa comillas/backslashes y evita </script>
+        return json.dumps(value).replace("</", "<\\/")
+
+    page_html = CHAT_PAGE_TEMPLATE.format(
+        bot_id=bot_id,
+        bot_id_js=js_str(bot_id),
+        bot_name=html.escape(bot.bot_name or bot.name),
+        welcome_message_js=js_str(bot.welcome_message or "¡Hola! ¿En qué puedo ayudarte?"),
+        primary_color=primary_color,
+        secondary_color=secondary_color,
+        bot_bubble_color=bot_bubble_color,
+        avatar=avatar_html,  # ya es HTML seguro (img escapado o texto escapado), no volver a escapar
+        gov_logo_html=gov_logo_html,
+        org_logo_html=org_logo_html,
+        avatar_js=js_str(avatar_html)[1:-1],  # sin comillas: se inserta dentro de un template literal ya entrecomillado
+        api_url_js=js_str(api_url),
+        api_key_js=js_str(key) if key else "null",
+    )
+    return HTMLResponse(content=page_html)
+
+
+async def _authorize_public_chat(bot_id: str, request: Request, db: AsyncSession) -> None:
+    """Si el bot tiene API keys activas configuradas, exige una válida en X-API-Key (y su
+    allowed_origins si tiene alguno definido). Si no tiene ninguna key activa, deja el chat
+    abierto como hasta ahora — así los bots ya embebidos sin este control no se rompen."""
+    result = await db.execute(select(APIKey).where(APIKey.chatbot_id == bot_id, APIKey.is_active == True))
+    keys = result.scalars().all()
+    if not keys:
+        return
+
+    provided = request.headers.get("x-api-key")
+    if not provided:
+        raise HTTPException(401, "Este chatbot requiere una API key (header X-API-Key)")
+
+    provided_hash = _hash_api_key(provided)
+    matched = next((k for k in keys if k.key_hash == provided_hash), None)
+    if not matched:
+        raise HTTPException(401, "API key inválida")
+
+    if matched.allowed_origins:
+        origin = request.headers.get("origin")
+        if not origin or origin not in matched.allowed_origins:
+            raise HTTPException(403, "Origen no permitido para esta API key")
+
+    matched.last_used = datetime.now(timezone.utc)
+    matched.requests_count = (matched.requests_count or 0) + 1
+    await db.commit()
 
 
 @chat_router.post("/{bot_id}")
@@ -540,13 +1133,14 @@ async def chat_api(
     db: AsyncSession = Depends(get_db),
 ):
     """Endpoint POST de la API de chat."""
+    await _authorize_public_chat(bot_id, request, db)
     svc = ChatService(db)
     try:
         result = await svc.chat(
             chatbot_id=bot_id,
             session_id=data.session_id,
             user_message=data.message,
-            ip_address=request.client.host if request.client else None,
+            ip_address=get_client_ip(request),
             user_agent=request.headers.get("user-agent"),
         )
         return result
@@ -554,6 +1148,7 @@ async def chat_api(
         raise HTTPException(400, str(e))
     except Exception as e:
         logger.error("chat_error", error=str(e))
+        asyncio.create_task(notify_bot_failure(bot_id, e))
         raise HTTPException(500, "Error interno del servidor")
 
 
@@ -578,6 +1173,7 @@ async def dashboard_stats(payload: dict = Depends(require_role("viewer")), db: A
 
 @analytics_router.get("/conversations/{bot_id}")
 async def bot_conversations(bot_id: str, limit: int = 50, payload: dict = Depends(require_role("viewer")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
     result = await db.execute(
         select(Conversation).where(Conversation.chatbot_id == bot_id)
         .order_by(Conversation.started_at.desc()).limit(limit)
@@ -591,6 +1187,10 @@ async def bot_conversations(bot_id: str, limit: int = 50, payload: dict = Depend
 
 @analytics_router.get("/conversations/{conv_id}/messages")
 async def conversation_messages(conv_id: str, payload: dict = Depends(require_role("viewer")), db: AsyncSession = Depends(get_db)):
+    conv = await db.get(Conversation, conv_id)
+    if not conv:
+        raise HTTPException(404, "Conversación no encontrada")
+    await _get_owned_chatbot(conv.chatbot_id, payload, db)
     result = await db.execute(
         select(Message).where(Message.conversation_id == conv_id).order_by(Message.created_at)
     )

@@ -16,9 +16,10 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.core.config import settings
+from app.core.net import get_client_ip
 from app.api.routers import (
-    auth_router, users_router, chatbots_router,
-    documents_router, chat_router, analytics_router,
+    auth_router, users_router, chatbots_router, api_keys_router,
+    ai_providers_router, branding_router, documents_router, chat_router, analytics_router,
 )
 
 logger = structlog.get_logger()
@@ -94,7 +95,7 @@ async def rate_limiter(request: Request, call_next):
     try:
         import redis.asyncio as redis_async
         r = redis_async.from_url(settings.REDIS_URL, decode_responses=True)
-        key = f"rl:{request.client.host}:{request.url.path}"
+        key = f"rl:{get_client_ip(request)}:{request.url.path}"
         current = await r.incr(key)
         if current == 1:
             await r.expire(key, settings.RATE_LIMIT_WINDOW_SECONDS)
@@ -118,6 +119,9 @@ API_PREFIX = "/api/v1"
 app.include_router(auth_router, prefix=API_PREFIX)
 app.include_router(users_router, prefix=API_PREFIX)
 app.include_router(chatbots_router, prefix=API_PREFIX)
+app.include_router(api_keys_router, prefix=API_PREFIX)
+app.include_router(ai_providers_router, prefix=API_PREFIX)
+app.include_router(branding_router, prefix=API_PREFIX)
 app.include_router(documents_router, prefix=API_PREFIX)
 app.include_router(chat_router, prefix=API_PREFIX)
 app.include_router(analytics_router, prefix=API_PREFIX)

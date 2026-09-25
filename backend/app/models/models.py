@@ -93,6 +93,7 @@ class Chatbot(Base):
     welcome_message: Mapped[str] = mapped_column(Text, default="¡Hola! ¿En qué puedo ayudarte?")
     bot_name: Mapped[str] = mapped_column(String(100), default="Asistente")
     bot_avatar_url: Mapped[Optional[str]] = mapped_column(String(500))
+    org_logo_url: Mapped[Optional[str]] = mapped_column(String(500))  # logo del organismo/secretaría dueña del bot
 
     # Widget Config (JSON)
     widget_config: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
@@ -229,3 +230,35 @@ class APIKey(Base):
     last_used: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     requests_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ─── AIProviderConfig ─────────────────────────────────────────
+class AIProviderConfig(Base):
+    """Configuración global por proveedor de IA: API key (cifrada) y caché de modelos
+    disponibles, gestionada por superadmin desde el panel de 'Proveedores de IA'."""
+    __tablename__ = "ai_provider_configs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    provider: Mapped[AIProvider] = mapped_column(SAEnum(AIProvider), unique=True, nullable=False)
+    api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text)
+    base_url: Mapped[Optional[str]] = mapped_column(String(500))  # usado por Ollama
+    models: Mapped[Optional[list]] = mapped_column(JSONB)  # caché de ids de modelos disponibles
+    models_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+# ─── ChatbotAssignment ────────────────────────────────────────
+class ChatbotAssignment(Base):
+    """Da acceso a un usuario (no dueño) a un chatbot puntual — separa 'qué puede hacer'
+    (el rol global: operator/viewer/...) de 'sobre qué bot puede hacerlo'."""
+    __tablename__ = "chatbot_assignments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    chatbot_id: Mapped[str] = mapped_column(String(36), ForeignKey("chatbots.id", ondelete="CASCADE"))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("chatbot_id", "user_id", name="uq_chatbot_assignment"),
+    )

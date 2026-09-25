@@ -59,6 +59,8 @@ services:
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       DEBUG: ${DEBUG:-false}
+      # El nginx de este mismo docker-compose ya manda X-Real-IP/X-Forwarded-For (ver nginx-proxy.conf)
+      TRUST_PROXY_HEADERS: "true"
     volumes:
       - uploads_data:/app/uploads
       - logs_data:/app/logs
