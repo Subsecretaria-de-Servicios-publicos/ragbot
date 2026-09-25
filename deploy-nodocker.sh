@@ -71,7 +71,8 @@ mkdir -p "$BACKEND"/{uploads,logs} "$BACKEND"/static/{avatars,org_logos,branding
 
 # ── Migraciones (contra la base remota del .env) ──────────────
 log "Corriendo migraciones"
-( cd "$BACKEND" && set -a && . "$ENV_FILE" && set +a && PYTHONPATH="$BACKEND" "$VENV/bin/alembic" upgrade head )
+# Sin "source" del .env (valores con espacios rompen bash): la app lo lee sola desde backend/
+( cd "$BACKEND" && PYTHONPATH="$BACKEND" "$VENV/bin/alembic" upgrade head )
 
 # ── Puerto libre (si es nuestro propio servicio no cuenta como ocupado) ──
 if ! systemctl is-active --quiet ragbot && ss -ltn "sport = :$APP_PORT" | grep -q LISTEN; then
