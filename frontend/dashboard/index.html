@@ -655,7 +655,7 @@
 
       <!-- Tab: Embed -->
       <div id="bot-tab-embed" style="display:none">
-        <div class="panel">
+        <div class="panel" id="apikeys-panel">
           <div class="panel-header">
             <span class="panel-title">API Keys</span>
             <button class="btn btn-primary btn-sm" onclick="createApiKey()">+ Nueva Key</button>
@@ -1235,6 +1235,11 @@ function canManageBotSettings() {
   return ['superadmin', 'admin'].includes(currentUser?.role);
 }
 
+// Código de embed y colores del widget: también para operator (API keys y accesos siguen siendo solo admin)
+function canUseEmbed() {
+  return ['superadmin', 'admin', 'operator'].includes(currentUser?.role);
+}
+
 async function openBotDetail(botId) {
   currentBotId = botId;
   document.getElementById('bot-detail-name').textContent = '...';
@@ -1243,13 +1248,15 @@ async function openBotDetail(botId) {
   const canManage = canManageBotSettings();
   document.getElementById('cfg-admin-panels').style.display = canManage ? '' : 'none';
   document.getElementById('bot-nav-tab-access').style.display = canManage ? '' : 'none';
-  document.getElementById('bot-nav-tab-embed').style.display = canManage ? '' : 'none';
+  const canEmbed = canUseEmbed();
+  document.getElementById('bot-nav-tab-embed').style.display = canEmbed ? '' : 'none';
+  document.getElementById('apikeys-panel').style.display = canManage ? '' : 'none';
 
   loadBotDocuments();
   loadBotConfig(botId);
   loadBotStats(botId);
+  if (canEmbed) updateEmbedCodes(botId);
   if (canManage) {
-    updateEmbedCodes(botId);
     loadApiKeys(botId);
     loadAssignments(botId);
   }
