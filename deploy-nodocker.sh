@@ -9,6 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 APP_DIR="$(pwd)"
 APP_USER="${APP_USER:-$(id -un)}"       # usuario que corre el servicio (override: APP_USER=ragbot ./deploy-nodocker.sh)
+APP_PORT="${APP_PORT:-8040}"            # puerto local del backend; si está ocupado: APP_PORT=8051 ./deploy-nodocker.sh
 BACKEND="$APP_DIR/backend"
 ENV_FILE="$BACKEND/.env"
 VENV="$BACKEND/.venv"
@@ -72,9 +73,15 @@ mkdir -p "$BACKEND"/{uploads,logs} "$BACKEND"/static/{avatars,org_logos,branding
 log "Corriendo migraciones"
 ( cd "$BACKEND" && set -a && . "$ENV_FILE" && set +a && PYTHONPATH="$BACKEND" "$VENV/bin/alembic" upgrade head )
 
+# ── Puerto libre (si es nuestro propio servicio no cuenta como ocupado) ──
+if ! systemctl is-active --quiet ragbot && ss -ltn "sport = :$APP_PORT" | grep -q LISTEN; then
+  ss -ltnp "sport = :$APP_PORT" || true
+  fail "el puerto $APP_PORT ya está en uso por otro proceso; elegí otro con APP_PORT=<puerto> (y ajustá docs/apache-ragbot.conf)"
+fi
+
 # ── Servicio systemd ──────────────────────────────────────────
 log "Instalando y reiniciando servicio ragbot"
-sed -e "s#@APP_DIR@#$APP_DIR#g" -e "s#@APP_USER@#$APP_USER#g" docs/ragbot.service \
+sed -e "s#@APP_DIR@#$APP_DIR#g" -e "s#@APP_USER@#$APP_USER#g" -e "s#@APP_PORT@#$APP_PORT#g" docs/ragbot.service \
   | sudo tee /etc/systemd/system/ragbot.service >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable ragbot >/dev/null
@@ -83,7 +90,7 @@ sudo systemctl restart ragbot
 # ── Health check ──────────────────────────────────────────────
 log "Esperando al backend"
 for i in $(seq 1 30); do
-  curl -fsS -o /dev/null http://127.0.0.1:8000/health && break
+  curl -fsS -o /dev/null http://127.0.0.1:$APP_PORT/health && break
   [ "$i" -eq 30 ] && { sudo journalctl -u ragbot -n 60 --no-pager; fail "el backend no respondió (logs arriba)"; }
   sleep 2
 done
@@ -92,6 +99,7 @@ log "Listo"
 systemctl --no-pager --lines=0 status ragbot | head -4
 echo
 echo "Dashboard: https://$DOMAIN/ragbot/"
+echo "Backend en 127.0.0.1:$APP_PORT (el ProxyPass de Apache debe apuntar a ese puerto)"
 echo "Si es la primera vez: pegá docs/apache-ragbot.conf en el VirtualHost, ajustá la ruta del Alias"
 echo "  y corré:  sudo a2enmod proxy proxy_http headers rewrite && sudo apachectl configtest && sudo systemctl reload apache2"
 echo "Logs: sudo journalctl -u ragbot -f"
