@@ -389,6 +389,9 @@
     <div class="nav-item" onclick="showPage('users')" id="nav-users">
       <span class="icon">👥</span> Usuarios
     </div>
+    <div class="nav-item" onclick="showPage('ai-providers')" id="nav-ai-providers">
+      <span class="icon">🔌</span> Proveedores de IA
+    </div>
     <div class="nav-section">Sistema</div>
     <div class="nav-item" onclick="showPage('settings')">
       <span class="icon">⚙️</span> Configuración
@@ -467,7 +470,7 @@
         <div>
           <div style="font-size:13px;color:var(--text3)">Gestiona todos tus asistentes conversacionales</div>
         </div>
-        <button class="btn btn-primary" onclick="openCreateBotModal()">+ Nuevo Chatbot</button>
+        <button class="btn btn-primary" id="btn-new-chatbot" onclick="openCreateBotModal()">+ Nuevo Chatbot</button>
       </div>
 
       <div id="bots-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">
@@ -486,7 +489,8 @@
       <div class="tabs">
         <div class="tab active" onclick="switchBotTab('documents', this)">📄 Documentos</div>
         <div class="tab" onclick="switchBotTab('config', this)">⚙️ Configuración</div>
-        <div class="tab" onclick="switchBotTab('embed', this)">🔗 Embed</div>
+        <div class="tab" id="bot-nav-tab-access" onclick="switchBotTab('access', this)">🔑 Acceso</div>
+        <div class="tab" id="bot-nav-tab-embed" onclick="switchBotTab('embed', this)">🔗 Embed</div>
         <div class="tab" onclick="switchBotTab('stats', this)">📈 Estadísticas</div>
       </div>
 
@@ -519,6 +523,34 @@
               <input class="form-input" id="cfg-bot-name" placeholder="Asistente">
             </div>
             <div class="form-group">
+              <label class="form-label">Descripción</label>
+              <input class="form-input" id="cfg-description" placeholder="Descripción breve del bot...">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Avatar</label>
+              <div style="display:flex;align-items:center;gap:14px">
+                <div id="cfg-avatar-preview" style="width:56px;height:56px;border-radius:50%;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:26px;overflow:hidden;flex-shrink:0">🤖</div>
+                <div>
+                  <input type="file" id="cfg-avatar-file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" style="display:none" onchange="uploadBotAvatar()">
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('cfg-avatar-file').click()">📷 Subir imagen</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="cfg-avatar-remove-btn" style="display:none" onclick="removeBotAvatar()">Quitar</button>
+                  <div class="form-hint">PNG, JPG, GIF, WEBP o SVG. Máx 2MB. La "carita" del bot — aparece en cada mensaje suyo y en el header del chat.</div>
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Logo del organismo</label>
+              <div style="display:flex;align-items:center;gap:14px">
+                <div id="cfg-org-logo-preview" style="width:56px;height:56px;border-radius:8px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text3);overflow:hidden;flex-shrink:0;text-align:center">Sin logo</div>
+                <div>
+                  <input type="file" id="cfg-org-logo-file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" style="display:none" onchange="uploadOrgLogo()">
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('cfg-org-logo-file').click()">📷 Subir imagen</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="cfg-org-logo-remove-btn" style="display:none" onclick="removeOrgLogo()">Quitar</button>
+                  <div class="form-hint">PNG, JPG, GIF, WEBP o SVG. Máx 2MB. Logo institucional (secretaría/organismo dueño del bot) — aparece en el header junto al logo del Gobierno de Salta, separado del avatar.</div>
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
               <label class="form-label">Mensaje de Bienvenida</label>
               <input class="form-input" id="cfg-welcome" placeholder="¡Hola! ¿En qué puedo ayudarte?">
             </div>
@@ -529,6 +561,7 @@
             </div>
           </div>
         </div>
+        <div id="cfg-admin-panels">
         <div class="panel">
           <div class="panel-header"><span class="panel-title">Modelo de IA</span></div>
           <div class="panel-body">
@@ -576,14 +609,71 @@
             </div>
           </div>
         </div>
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Publicación</span></div>
+          <div class="panel-body">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="cfg-is-public">
+              <span>Bot público (accesible vía widget y chat embebido)</span>
+            </label>
+            <div class="form-hint">Si está desmarcado, el widget y la página de chat de este bot no responden a nadie, aunque tengan el link o el bot_id.</div>
+          </div>
+        </div>
+        </div><!-- /cfg-admin-panels -->
         <div style="display:flex;gap:10px">
           <button class="btn btn-primary" onclick="saveBotConfig()">💾 Guardar Configuración</button>
           <button class="btn btn-secondary" onclick="testBotConfig()">🧪 Probar Bot</button>
         </div>
       </div>
 
+      <!-- Tab: Access (asignación de usuarios, solo admin/superadmin) -->
+      <div id="bot-tab-access" style="display:none">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Usuarios con acceso a este bot</span>
+          </div>
+          <div class="panel-body">
+            <p style="font-size:13px;color:var(--text2);margin-bottom:16px">
+              Además del dueño y los admins/superadmins (que ven todos los bots), podés darle acceso puntual
+              a este bot a otros usuarios. Su rol global sigue definiendo qué pueden hacer: un <b>operator</b>
+              asignado puede editar nombre/descripción/prompt y subir documentos; un <b>viewer</b> asignado
+              solo puede verlo.
+            </p>
+            <div style="display:flex;gap:10px;margin-bottom:16px">
+              <select class="form-select" id="assign-user-select" style="max-width:320px"></select>
+              <button class="btn btn-primary btn-sm" onclick="addAssignment()">+ Dar acceso</button>
+            </div>
+            <table>
+              <thead><tr><th>Usuario</th><th>Email</th><th>Rol</th><th>Acciones</th></tr></thead>
+              <tbody id="assignments-table">
+                <tr><td colspan="4" style="text-align:center;color:var(--text3);padding:16px">Cargando...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <!-- Tab: Embed -->
       <div id="bot-tab-embed" style="display:none">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">API Keys</span>
+            <button class="btn btn-primary btn-sm" onclick="createApiKey()">+ Nueva Key</button>
+          </div>
+          <div class="panel-body">
+            <p style="font-size:13px;color:var(--text2);margin-bottom:16px">
+              Opcional. Sin ninguna key activa, el chat de este bot queda abierto (como hasta ahora).
+              Si creás al menos una, el chat va a exigir esa key — y si le configurás dominios permitidos,
+              solo va a responder cuando se lo embeba desde esos dominios.
+            </p>
+            <table>
+              <thead><tr><th>Nombre</th><th>Dominios permitidos</th><th>Usos</th><th>Estado</th><th>Acciones</th></tr></thead>
+              <tbody id="apikeys-table">
+                <tr><td colspan="5" style="text-align:center;color:var(--text3);padding:16px">Cargando...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
         <div class="panel">
           <div class="panel-header"><span class="panel-title">Código de Embed</span></div>
           <div class="panel-body">
@@ -609,11 +699,19 @@
             </div>
 
             <div style="margin-top:20px">
-              <label class="form-label">Color Primario del Widget</label>
-              <div style="display:flex;gap:10px;align-items:center">
-                <input type="color" value="#6c63ff" id="widget-color" style="width:40px;height:32px;border:none;border-radius:4px;cursor:pointer">
-                <span style="font-size:13px;color:var(--text2)">Personaliza el color del botón flotante</span>
+              <label class="form-label">Colores del Widget</label>
+              <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
+                <div style="display:flex;gap:10px;align-items:center">
+                  <input type="color" value="#6c63ff" id="widget-color" style="width:40px;height:32px;border:none;border-radius:4px;cursor:pointer">
+                  <span style="font-size:13px;color:var(--text2)">Primario (botón, header, burbuja del usuario)</span>
+                </div>
+                <div style="display:flex;gap:10px;align-items:center">
+                  <input type="color" value="#a78bfa" id="widget-color-2" style="width:40px;height:32px;border:none;border-radius:4px;cursor:pointer">
+                  <span style="font-size:13px;color:var(--text2)">Secundario (degradé del header, tono pastel de la burbuja del bot)</span>
+                </div>
               </div>
+              <p class="form-hint" style="margin-top:8px">Si elegís un color muy neutro/grisáceo, el tono pastel de la burbuja se va a notar poco — probá con un color con más saturación.</p>
+              <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="saveWidgetColors()">💾 Guardar colores</button>
             </div>
           </div>
         </div>
@@ -685,6 +783,35 @@
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    <!-- ══ PAGE: AI PROVIDERS ══════════════════════════════ -->
+    <div class="page" id="page-ai-providers">
+      <div class="panel" style="margin-bottom:20px">
+        <div class="panel-header"><span class="panel-title">Marca institucional</span></div>
+        <div class="panel-body">
+          <p style="font-size:13px;color:var(--text2);margin-bottom:16px">
+            Logo del Gobierno de Salta — se muestra en el header de <b>todos</b> los bots (junto al avatar
+            propio de cada uno, que sirve como logo del organismo).
+          </p>
+          <div style="display:flex;align-items:center;gap:14px">
+            <div id="gov-logo-preview" style="width:64px;height:64px;border-radius:8px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text3);overflow:hidden;flex-shrink:0;text-align:center">Sin logo</div>
+            <div>
+              <input type="file" id="gov-logo-file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" style="display:none" onchange="uploadGovLogo()">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('gov-logo-file').click()">📷 Subir logo</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="gov-logo-remove-btn" style="display:none" onclick="removeGovLogo()">Quitar</button>
+              <div class="form-hint">PNG, JPG, GIF, WEBP o SVG. Máx 2MB.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px">
+        API keys globales por proveedor de IA. Si no configurás nada acá, se sigue usando la key de <code>.env</code> del servidor.
+        El listado de modelos arranca con un set curado y se puede actualizar en vivo consultando al proveedor.
+      </p>
+      <div id="ai-providers-list">
+        <div style="text-align:center;color:var(--text3);padding:40px">Cargando...</div>
       </div>
     </div>
 
@@ -824,6 +951,49 @@
   </div>
 </div>
 
+<!-- ══ MODAL: EDIT USER (solo superadmin) ══════════════════ -->
+<div class="modal-overlay" id="modal-edit-user">
+  <div class="modal" style="width:440px">
+    <div class="modal-header">
+      <span class="modal-title">Editar Usuario</span>
+      <button class="btn-close" onclick="closeModal('modal-edit-user')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Username *</label>
+          <input class="form-input" id="eu-username" placeholder="john_doe">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email *</label>
+          <input class="form-input" id="eu-email" type="email" placeholder="john@empresa.com">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Nombre Completo</label>
+        <input class="form-input" id="eu-fullname" placeholder="John Doe">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Rol</label>
+        <select class="form-select" id="eu-role">
+          <option value="viewer">Viewer</option>
+          <option value="operator">Operator</option>
+          <option value="admin">Admin</option>
+          <option value="superadmin">SuperAdmin</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Nueva Contraseña</label>
+        <input class="form-input" id="eu-password" type="password" placeholder="Dejar vacío para no cambiarla">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-edit-user')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveUserEdit()">Guardar Cambios</button>
+    </div>
+  </div>
+</div>
+
 <!-- ══ MODAL: CONVERSATION VIEWER ═════════════════════════ -->
 <div class="modal-overlay" id="modal-conversation">
   <div class="modal" style="width:620px">
@@ -843,7 +1013,9 @@
 // ═══════════════════════════════════════════════════════════════
 // CONFIG & STATE
 // ═══════════════════════════════════════════════════════════════
-let API_URL = localStorage.getItem('ragbot_api_url') || 'http://localhost:8040';
+const _isLocal = ['localhost', '127.0.0.1'].includes(location.hostname);
+let API_URL = localStorage.getItem('ragbot_api_url')
+  || (_isLocal ? 'http://localhost:8040' : location.origin + '/ragbot');
 let token = localStorage.getItem('ragbot_token');
 let currentUser = null;
 let currentBotId = null;
@@ -877,6 +1049,10 @@ async function initDashboard() {
     if (!['superadmin', 'admin'].includes(me.role)) {
       document.getElementById('nav-admin-section').style.display = 'none';
       document.getElementById('nav-users').style.display = 'none';
+    }
+    // Proveedores de IA (API keys) solo para superadmin
+    if (me.role !== 'superadmin') {
+      document.getElementById('nav-ai-providers').style.display = 'none';
     }
 
     document.getElementById('login-screen').style.display = 'none';
@@ -922,6 +1098,12 @@ document.addEventListener('keydown', e => {
 // ═══════════════════════════════════════════════════════════════
 // API HELPER
 // ═══════════════════════════════════════════════════════════════
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
 async function api(path, method = 'GET', body = null, auth = true) {
   const headers = { 'Content-Type': 'application/json' };
   if (auth && token) headers['Authorization'] = `Bearer ${token}`;
@@ -950,7 +1132,8 @@ async function apiUpload(path, formData) {
 // ═══════════════════════════════════════════════════════════════
 const PAGE_TITLES = {
   dashboard: 'Dashboard', chatbots: 'Chatbots', 'bot-detail': 'Detalle del Bot',
-  conversations: 'Conversaciones', users: 'Usuarios', settings: 'Configuración'
+  conversations: 'Conversaciones', users: 'Usuarios', settings: 'Configuración',
+  'ai-providers': 'Proveedores de IA',
 };
 
 function showPage(name) {
@@ -967,6 +1150,7 @@ function showPage(name) {
   else if (name === 'chatbots') loadChatbots();
   else if (name === 'conversations') loadAllConversations();
   else if (name === 'users') loadUsers();
+  else if (name === 'ai-providers') { loadAIProviders(); loadGovLogo(); }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -984,8 +1168,8 @@ async function loadDashboardStats() {
     const tbody = document.getElementById('recent-bots-table');
     tbody.innerHTML = bots.slice(0, 5).map(b => `
       <tr>
-        <td class="td-main">${b.name}</td>
-        <td><span class="badge badge-purple">${b.ai_provider}</span></td>
+        <td class="td-main">${escapeHtml(b.name)}</td>
+        <td><span class="badge badge-purple">${escapeHtml(b.ai_provider)}</span></td>
         <td>${b.total_conversations}</td>
         <td class="text-mono">${formatNum(b.total_tokens_used)}</td>
         <td><span class="dot ${b.is_active ? 'dot-green' : 'dot-red'}"></span></td>
@@ -998,13 +1182,15 @@ async function loadDashboardStats() {
 // ═══════════════════════════════════════════════════════════════
 async function loadChatbots() {
   const grid = document.getElementById('bots-grid');
+  const canCreate = canManageBotSettings();
+  document.getElementById('btn-new-chatbot').style.display = canCreate ? '' : 'none';
   try {
     const bots = await api('/api/v1/chatbots/');
     if (!bots.length) {
       grid.innerHTML = `<div style="text-align:center;color:var(--text3);padding:60px;grid-column:1/-1">
         <div style="font-size:40px;margin-bottom:12px">🤖</div>
-        <div>No tienes chatbots aún</div>
-        <button class="btn btn-primary" style="margin-top:16px" onclick="openCreateBotModal()">Crear primer chatbot</button>
+        <div>${canCreate ? 'No tienes chatbots aún' : 'Todavía no tenés acceso a ningún bot — pedile a un admin que te asigne uno'}</div>
+        ${canCreate ? `<button class="btn btn-primary" style="margin-top:16px" onclick="openCreateBotModal()">Crear primer chatbot</button>` : ''}
       </div>`;
       return;
     }
@@ -1012,8 +1198,8 @@ async function loadChatbots() {
       <div class="panel" style="cursor:pointer;transition:border-color 0.2s" onmouseenter="this.style.borderColor='var(--border2)'" onmouseleave="this.style.borderColor='var(--border)'">
         <div class="panel-header">
           <div>
-            <div style="font-size:15px;font-weight:600">${b.name}</div>
-            <div style="font-size:12px;color:var(--text3);margin-top:2px">${b.slug}</div>
+            <div style="font-size:15px;font-weight:600">${escapeHtml(b.name)}</div>
+            <div style="font-size:12px;color:var(--text3);margin-top:2px">${escapeHtml(b.slug)}</div>
           </div>
           <span class="dot ${b.is_active ? 'dot-green' : 'dot-red'}"></span>
         </div>
@@ -1021,7 +1207,7 @@ async function loadChatbots() {
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
             <div>
               <div class="stat-label">Proveedor</div>
-              <div style="font-size:13px"><span class="badge badge-purple">${b.ai_provider}/${b.ai_model}</span></div>
+              <div style="font-size:13px"><span class="badge badge-purple">${escapeHtml(b.ai_provider)}/${escapeHtml(b.ai_model)}</span></div>
             </div>
             <div>
               <div class="stat-label">Conversaciones</div>
@@ -1037,25 +1223,44 @@ async function loadChatbots() {
             </div>
           </div>
           <div style="display:flex;gap:8px">
-            <button class="btn btn-primary btn-sm" onclick="openBotDetail('${b.id}','${b.name}')">Gestionar</button>
-            <button class="btn btn-danger btn-sm" onclick="deleteBot(event,'${b.id}')">🗑</button>
+            <button class="btn btn-primary btn-sm" onclick="openBotDetail('${b.id}')">Gestionar</button>
+            ${canManageBotSettings() ? `<button class="btn btn-danger btn-sm" onclick="deleteBot(event,'${b.id}')">🗑</button>` : ''}
           </div>
         </div>
       </div>`).join('');
   } catch(e) { grid.innerHTML = `<div style="color:var(--danger);grid-column:1/-1">Error: ${e.message}</div>`; }
 }
 
-async function openBotDetail(botId, botName) {
+function canManageBotSettings() {
+  return ['superadmin', 'admin'].includes(currentUser?.role);
+}
+
+async function openBotDetail(botId) {
   currentBotId = botId;
-  document.getElementById('bot-detail-name').textContent = botName;
+  document.getElementById('bot-detail-name').textContent = '...';
   showPage('bot-detail');
+
+  const canManage = canManageBotSettings();
+  document.getElementById('cfg-admin-panels').style.display = canManage ? '' : 'none';
+  document.getElementById('bot-nav-tab-access').style.display = canManage ? '' : 'none';
+  document.getElementById('bot-nav-tab-embed').style.display = canManage ? '' : 'none';
+
   loadBotDocuments();
   loadBotConfig(botId);
-  updateEmbedCodes(botId);
   loadBotStats(botId);
+  if (canManage) {
+    updateEmbedCodes(botId);
+    loadApiKeys(botId);
+    loadAssignments(botId);
+  }
 }
 
 function openCreateBotModal() {
+  document.getElementById('new-bot-name').value = '';
+  document.getElementById('new-bot-desc').value = '';
+  document.getElementById('new-bot-provider').value = 'openai';
+  document.getElementById('new-bot-botname').value = 'Asistente';
+  document.getElementById('new-bot-prompt').value = '';
   updateModelOptions('new-bot-provider', 'new-bot-model');
   document.getElementById('modal-create-bot').classList.add('open');
 }
@@ -1102,14 +1307,14 @@ async function loadBotDocuments() {
     }
     tbody.innerHTML = docs.map(d => `
       <tr>
-        <td class="td-main">${d.filename}</td>
+        <td class="td-main">${escapeHtml(d.filename)}</td>
         <td>${statusBadge(d.status)}</td>
         <td class="text-mono">${d.chunk_count}</td>
         <td class="text-mono">${d.page_count}</td>
         <td class="text-mono">${formatBytes(d.file_size)}</td>
         <td>
           <button class="btn btn-danger btn-sm" onclick="deleteDoc('${d.id}')">🗑</button>
-          ${d.status === 'error' ? `<span style="font-size:11px;color:var(--danger)" title="${d.error_message}">⚠</span>` : ''}
+          ${d.status === 'error' ? `<span style="font-size:11px;color:var(--danger)" title="${escapeHtml(d.error_message)}">⚠</span>` : ''}
         </td>
       </tr>`).join('');
   } catch(e) { tbody.innerHTML = `<tr><td colspan="6" style="color:var(--danger)">Error: ${e.message}</td></tr>`; }
@@ -1177,31 +1382,160 @@ async function loadBotConfig(botId) {
   try {
     const bot = await api(`/api/v1/chatbots/${botId}`);
     document.getElementById('cfg-bot-name').value = bot.bot_name || '';
+    document.getElementById('cfg-description').value = bot.description || '';
     document.getElementById('cfg-welcome').value = bot.welcome_message || '';
     document.getElementById('cfg-system-prompt').value = bot.system_prompt || '';
     document.getElementById('cfg-provider').value = bot.ai_provider || 'openai';
-    updateModelOptions('cfg-provider', 'cfg-model');
+    await updateModelOptions('cfg-provider', 'cfg-model');
     document.getElementById('cfg-model').value = bot.ai_model || '';
     document.getElementById('cfg-temperature').value = bot.temperature || 0.7;
     document.getElementById('temp-val').textContent = bot.temperature || 0.7;
     document.getElementById('cfg-max-tokens').value = bot.max_tokens || 1000;
     document.getElementById('cfg-top-k').value = bot.top_k || 5;
     document.getElementById('cfg-threshold').value = bot.similarity_threshold || 0.7;
+    document.getElementById('cfg-is-public').checked = !!bot.is_public;
+    renderAvatarPreview(bot.bot_avatar_url);
+    renderOrgLogoPreview(bot.org_logo_url);
   } catch(e) { toast('Error cargando config: ' + e.message, 'error'); }
+}
+
+function renderAvatarPreview(avatarUrl) {
+  const preview = document.getElementById('cfg-avatar-preview');
+  const removeBtn = document.getElementById('cfg-avatar-remove-btn');
+  if (avatarUrl) {
+    const src = /^https?:\/\//.test(avatarUrl) ? avatarUrl : API_URL + avatarUrl;
+    preview.innerHTML = `<img src="${escapeHtml(src)}" style="width:100%;height:100%;object-fit:cover">`;
+    removeBtn.style.display = '';
+  } else {
+    preview.textContent = '🤖';
+    removeBtn.style.display = 'none';
+  }
+}
+
+async function uploadBotAvatar() {
+  const fileInput = document.getElementById('cfg-avatar-file');
+  const file = fileInput.files[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) { toast('La imagen no puede superar los 2MB', 'error'); fileInput.value = ''; return; }
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const res = await apiUpload(`/api/v1/chatbots/${currentBotId}/avatar`, formData);
+    renderAvatarPreview(res.avatar_url);
+    toast('Avatar actualizado', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+  fileInput.value = '';
+}
+
+async function removeBotAvatar() {
+  if (!confirm('¿Quitar la imagen y volver al avatar por defecto?')) return;
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}/avatar`, 'DELETE');
+    renderAvatarPreview(null);
+    toast('Avatar quitado', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function renderOrgLogoPreview(url) {
+  const preview = document.getElementById('cfg-org-logo-preview');
+  const removeBtn = document.getElementById('cfg-org-logo-remove-btn');
+  if (url) {
+    const src = /^https?:\/\//.test(url) ? url : API_URL + url;
+    preview.innerHTML = `<img src="${escapeHtml(src)}" style="width:100%;height:100%;object-fit:cover">`;
+    removeBtn.style.display = '';
+  } else {
+    preview.textContent = 'Sin logo';
+    removeBtn.style.display = 'none';
+  }
+}
+
+async function uploadOrgLogo() {
+  const fileInput = document.getElementById('cfg-org-logo-file');
+  const file = fileInput.files[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) { toast('La imagen no puede superar los 2MB', 'error'); fileInput.value = ''; return; }
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const res = await apiUpload(`/api/v1/chatbots/${currentBotId}/org-logo`, formData);
+    renderOrgLogoPreview(res.org_logo_url);
+    toast('Logo del organismo actualizado', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+  fileInput.value = '';
+}
+
+async function removeOrgLogo() {
+  if (!confirm('¿Quitar el logo del organismo?')) return;
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}/org-logo`, 'DELETE');
+    renderOrgLogoPreview(null);
+    toast('Logo quitado', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MARCA INSTITUCIONAL (logo de Gobierno, global — solo superadmin)
+// ═══════════════════════════════════════════════════════════════
+function renderGovLogoPreview(url) {
+  const preview = document.getElementById('gov-logo-preview');
+  const removeBtn = document.getElementById('gov-logo-remove-btn');
+  if (url) {
+    const src = /^https?:\/\//.test(url) ? url : API_URL + url;
+    preview.innerHTML = `<img src="${escapeHtml(src)}" style="width:100%;height:100%;object-fit:cover">`;
+    removeBtn.style.display = '';
+  } else {
+    preview.textContent = 'Sin logo';
+    removeBtn.style.display = 'none';
+  }
+}
+
+async function loadGovLogo() {
+  try {
+    const data = await api('/api/v1/admin/branding/');
+    renderGovLogoPreview(data.gov_logo_url);
+  } catch(e) { /* si falla, queda el estado "Sin logo" */ }
+}
+
+async function uploadGovLogo() {
+  const fileInput = document.getElementById('gov-logo-file');
+  const file = fileInput.files[0];
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024) { toast('La imagen no puede superar los 2MB', 'error'); fileInput.value = ''; return; }
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const res = await apiUpload('/api/v1/admin/branding/gov-logo', formData);
+    renderGovLogoPreview(res.gov_logo_url);
+    toast('Logo actualizado', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+  fileInput.value = '';
+}
+
+async function removeGovLogo() {
+  if (!confirm('¿Quitar el logo del Gobierno de todos los bots?')) return;
+  try {
+    await api('/api/v1/admin/branding/gov-logo', 'DELETE');
+    renderGovLogoPreview(null);
+    toast('Logo quitado', 'success');
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 async function saveBotConfig() {
   const data = {
     bot_name: document.getElementById('cfg-bot-name').value,
+    description: document.getElementById('cfg-description').value,
     welcome_message: document.getElementById('cfg-welcome').value,
     system_prompt: document.getElementById('cfg-system-prompt').value,
+  };
+  if (canManageBotSettings()) Object.assign(data, {
     ai_provider: document.getElementById('cfg-provider').value,
     ai_model: document.getElementById('cfg-model').value,
     temperature: parseFloat(document.getElementById('cfg-temperature').value),
     max_tokens: parseInt(document.getElementById('cfg-max-tokens').value),
     top_k: parseInt(document.getElementById('cfg-top-k').value),
     similarity_threshold: parseFloat(document.getElementById('cfg-threshold').value),
-  };
+    is_public: document.getElementById('cfg-is-public').checked,
+  });
   try {
     await api(`/api/v1/chatbots/${currentBotId}`, 'PATCH', data);
     toast('Configuración guardada', 'success');
@@ -1211,7 +1545,9 @@ async function saveBotConfig() {
 // ═══════════════════════════════════════════════════════════════
 // EMBED CODES
 // ═══════════════════════════════════════════════════════════════
-function updateEmbedCodes(botId) {
+let currentWidgetConfig = {};
+
+async function updateEmbedCodes(botId) {
   const script1 = `<script>
   window.RAGBOT_API_URL = "${API_URL}";
 <\/script>
@@ -1227,6 +1563,26 @@ function updateEmbedCodes(botId) {
   document.getElementById('embed-script-1').textContent = script1;
   document.getElementById('embed-script-2').textContent = script2;
   document.getElementById('embed-fullpage').href = `${API_URL}/api/v1/chat/${botId}`;
+
+  try {
+    const bot = await api(`/api/v1/chatbots/${botId}`);
+    currentWidgetConfig = bot.widget_config || {};
+    document.getElementById('widget-color').value = currentWidgetConfig.primary_color || '#6c63ff';
+    document.getElementById('widget-color-2').value = currentWidgetConfig.secondary_color || '#a78bfa';
+  } catch(e) { /* si falla, quedan los valores por defecto de los inputs */ }
+}
+
+async function saveWidgetColors() {
+  const merged = {
+    ...currentWidgetConfig,
+    primary_color: document.getElementById('widget-color').value,
+    secondary_color: document.getElementById('widget-color-2').value,
+  };
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}`, 'PATCH', { widget_config: merged });
+    currentWidgetConfig = merged;
+    toast('Colores guardados', 'success');
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 function copyEmbed(elementId) {
@@ -1235,11 +1591,189 @@ function copyEmbed(elementId) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// API KEYS
+// ═══════════════════════════════════════════════════════════════
+async function loadApiKeys(botId) {
+  const tbody = document.getElementById('apikeys-table');
+  try {
+    const keys = await api(`/api/v1/chatbots/${botId}/api-keys/`);
+    tbody.innerHTML = keys.length ? keys.map(k => `
+      <tr>
+        <td class="td-main">${escapeHtml(k.name)}</td>
+        <td class="text-sm">${(k.allowed_origins && k.allowed_origins.length) ? escapeHtml(k.allowed_origins.join(', ')) : 'Cualquiera'}</td>
+        <td class="text-mono">${k.requests_count}</td>
+        <td><span class="dot ${k.is_active ? 'dot-green' : 'dot-red'}"></span></td>
+        <td><button class="btn btn-danger btn-sm" onclick="revokeApiKey('${k.id}')">🗑</button></td>
+      </tr>`).join('')
+      : '<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:16px">Sin API keys — el bot está abierto</td></tr>';
+  } catch(e) { tbody.innerHTML = `<tr><td colspan="5" style="color:var(--danger)">Error: ${escapeHtml(e.message)}</td></tr>`; }
+}
+
+async function createApiKey() {
+  const name = prompt('Nombre para identificar esta key (ej: sitio-produccion):', 'Default');
+  if (name === null) return;
+  const originsRaw = prompt('Dominios permitidos separados por coma (vacío = cualquiera). Ej: https://miweb.gob.ar', '');
+  const allowed_origins = (originsRaw && originsRaw.trim())
+    ? originsRaw.split(',').map(s => s.trim()).filter(Boolean)
+    : null;
+  try {
+    const created = await api(`/api/v1/chatbots/${currentBotId}/api-keys/`, 'POST', { name: name || 'Default', allowed_origins });
+    await loadApiKeys(currentBotId);
+    const snippet = `<script>
+  window.RAGBOT_API_URL = "${API_URL}";
+<\/script>
+<script src="${API_URL}/api/v1/chatbots/${currentBotId}/widget.js?key=${encodeURIComponent(created.api_key)}"><\/script>`;
+    alert(`API key creada — copiala ahora, no se vuelve a mostrar:\n\n${created.api_key}\n\nCódigo de embed con esta key ya incluida:\n\n${snippet}`);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function revokeApiKey(keyId) {
+  if (!confirm('¿Eliminar esta API key? Los sitios que la usen van a dejar de poder chatear.')) return;
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}/api-keys/${keyId}`, 'DELETE');
+    toast('API key eliminada', 'success');
+    loadApiKeys(currentBotId);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ACCESO (asignación de usuarios a un bot — solo admin/superadmin)
+// ═══════════════════════════════════════════════════════════════
+async function loadAssignments(botId) {
+  const tbody = document.getElementById('assignments-table');
+  try {
+    const [assignments, allUsers] = await Promise.all([
+      api(`/api/v1/chatbots/${botId}/assignments`),
+      api('/api/v1/users/'),
+    ]);
+    tbody.innerHTML = assignments.length ? assignments.map(a => `
+      <tr>
+        <td class="td-main">${escapeHtml(a.username)}</td>
+        <td>${escapeHtml(a.email)}</td>
+        <td>${roleBadge(a.role)}</td>
+        <td><button class="btn btn-danger btn-sm" onclick="removeAssignment('${a.user_id}')">🗑</button></td>
+      </tr>`).join('')
+      : '<tr><td colspan="4" style="text-align:center;color:var(--text3);padding:16px">Nadie más tiene acceso — solo el dueño y los admins/superadmins</td></tr>';
+
+    const assignedIds = new Set(assignments.map(a => a.user_id));
+    const select = document.getElementById('assign-user-select');
+    const candidates = allUsers.filter(u => !assignedIds.has(u.id));
+    select.innerHTML = candidates.length
+      ? candidates.map(u => `<option value="${u.id}">${escapeHtml(u.username)} (${u.role})</option>`).join('')
+      : '<option value="">No hay más usuarios para asignar</option>';
+  } catch(e) { tbody.innerHTML = `<tr><td colspan="4" style="color:var(--danger)">Error: ${escapeHtml(e.message)}</td></tr>`; }
+}
+
+async function addAssignment() {
+  const userId = document.getElementById('assign-user-select').value;
+  if (!userId) { toast('Elegí un usuario', 'error'); return; }
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}/assignments`, 'POST', { user_id: userId });
+    toast('Acceso otorgado', 'success');
+    loadAssignments(currentBotId);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function removeAssignment(userId) {
+  if (!confirm('¿Quitarle el acceso a este bot a este usuario?')) return;
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}/assignments/${userId}`, 'DELETE');
+    toast('Acceso quitado', 'success');
+    loadAssignments(currentBotId);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// AI PROVIDERS (solo superadmin)
+// ═══════════════════════════════════════════════════════════════
+const PROVIDER_LABELS = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', ollama: 'Ollama (local)' };
+
+async function loadAIProviders() {
+  const container = document.getElementById('ai-providers-list');
+  try {
+    const providers = await api('/api/v1/admin/ai-providers/');
+    container.innerHTML = providers.map(p => `
+      <div class="panel" style="margin-bottom:16px">
+        <div class="panel-header">
+          <span class="panel-title">${escapeHtml(PROVIDER_LABELS[p.provider] || p.provider)}</span>
+          <span class="badge ${p.configured ? 'badge-green' : 'badge-red'}">
+            ${p.key_source === 'db' ? 'Key en BD' : p.key_source === 'env' ? 'Key en .env' : p.configured ? 'Configurado' : 'Sin configurar'}
+          </span>
+        </div>
+        <div class="panel-body">
+          ${p.provider === 'ollama' ? `
+            <div class="form-group">
+              <label class="form-label">URL del servidor Ollama</label>
+              <input class="form-input" id="prov-baseurl-${p.provider}" value="${escapeHtml(p.base_url || '')}" placeholder="http://localhost:11434">
+            </div>` : `
+            <div class="form-group">
+              <label class="form-label">API Key ${p.key_source === 'db' ? '(hay una guardada — dejar vacío para no cambiarla)' : ''}</label>
+              <input class="form-input" type="password" id="prov-key-${p.provider}" placeholder="${p.key_source === 'db' ? '•••••••• configurada' : 'sk-...'}">
+            </div>`}
+          <div style="display:flex;gap:10px;margin-bottom:16px">
+            <button class="btn btn-primary btn-sm" onclick="saveProviderConfig('${p.provider}')">💾 Guardar</button>
+            ${p.key_source === 'db' ? `<button class="btn btn-secondary btn-sm" onclick="clearProviderKey('${p.provider}')">Quitar key guardada</button>` : ''}
+          </div>
+          <div style="font-size:13px;color:var(--text2)">
+            <strong>${p.models.length}</strong> modelos disponibles
+            <span class="badge ${p.models_source === 'cached' ? 'badge-purple' : 'badge-yellow'}">${p.models_source === 'cached' ? 'actualizado en vivo' : 'listado curado'}</span>
+            ${p.models_updated_at ? ` · última actualización: ${new Date(p.models_updated_at).toLocaleString('es')}` : ''}
+          </div>
+          <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:4px">
+            ${p.models.slice(0, 8).map(m => `<span class="badge badge-purple">${escapeHtml(m)}</span>`).join('')}
+            ${p.models.length > 8 ? `<span class="badge">+${p.models.length - 8} más</span>` : ''}
+          </div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:12px" onclick="refreshProviderModels('${p.provider}')">🔄 Actualizar modelos desde el proveedor</button>
+        </div>
+      </div>`).join('');
+  } catch(e) {
+    container.innerHTML = `<div style="color:var(--danger)">Error: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function saveProviderConfig(provider) {
+  const data = {};
+  if (provider === 'ollama') {
+    data.base_url = document.getElementById(`prov-baseurl-${provider}`).value.trim();
+  } else {
+    const key = document.getElementById(`prov-key-${provider}`).value.trim();
+    if (!key) { toast('Nada para guardar', 'error'); return; }
+    data.api_key = key;
+  }
+  try {
+    await api(`/api/v1/admin/ai-providers/${provider}`, 'PUT', data);
+    toast('Guardado', 'success');
+    delete MODEL_CACHE[provider];
+    loadAIProviders();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function clearProviderKey(provider) {
+  if (!confirm('¿Quitar la API key guardada y volver a usar la de .env?')) return;
+  try {
+    await api(`/api/v1/admin/ai-providers/${provider}`, 'PUT', { api_key: '' });
+    toast('Key eliminada', 'success');
+    delete MODEL_CACHE[provider];
+    loadAIProviders();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function refreshProviderModels(provider) {
+  try {
+    const res = await api(`/api/v1/admin/ai-providers/${provider}/refresh-models`, 'POST');
+    toast(`${res.models.length} modelos actualizados`, 'success');
+    delete MODEL_CACHE[provider];
+    loadAIProviders();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // BOT STATS
 // ═══════════════════════════════════════════════════════════════
 async function loadBotStats(botId) {
   try {
     const bot = await api(`/api/v1/chatbots/${botId}`);
+    document.getElementById('bot-detail-name').textContent = bot.name;
     document.getElementById('bot-stat-convs').textContent = bot.total_conversations ?? '-';
     document.getElementById('bot-stat-msgs').textContent = bot.total_messages ?? '-';
     document.getElementById('bot-stat-tokens').textContent = formatNum(bot.total_tokens_used ?? 0);
@@ -1271,8 +1805,8 @@ async function viewConversation(convId) {
           ${m.role === 'user' ? '👤' : '🤖'}
         </div>
         <div style="max-width:80%;background:var(--bg3);border-radius:10px;padding:10px 14px;${m.role === 'user' ? 'background:rgba(108,99,255,0.1)' : ''}">
-          <div style="font-size:13px;line-height:1.5">${m.content}</div>
-          ${m.total_tokens ? `<div style="font-size:10px;color:var(--text3);margin-top:4px;font-family:var(--mono)">${m.total_tokens} tokens · ${m.latency_ms}ms · ${m.model_used}</div>` : ''}
+          <div style="font-size:13px;line-height:1.5">${escapeHtml(m.content)}</div>
+          ${m.total_tokens ? `<div style="font-size:10px;color:var(--text3);margin-top:4px;font-family:var(--mono)">${m.total_tokens} tokens · ${m.latency_ms}ms · ${escapeHtml(m.model_used)}</div>` : ''}
         </div>
       </div>`).join('');
     document.getElementById('modal-conversation').classList.add('open');
@@ -1297,7 +1831,7 @@ async function loadAllConversations() {
     allConvs.sort((a,b) => new Date(b.started_at) - new Date(a.started_at));
     tbody.innerHTML = allConvs.slice(0, 50).map(c => `
       <tr>
-        <td class="td-main">${c._botName}</td>
+        <td class="td-main">${escapeHtml(c._botName)}</td>
         <td class="text-mono text-sm">${c.session_id.slice(0,20)}...</td>
         <td>${c.total_messages}</td>
         <td class="text-mono">${formatNum(c.total_tokens)}</td>
@@ -1310,18 +1844,23 @@ async function loadAllConversations() {
 // ═══════════════════════════════════════════════════════════════
 // USERS
 // ═══════════════════════════════════════════════════════════════
+let currentUsersList = [];
+
 async function loadUsers() {
   const tbody = document.getElementById('users-table');
   try {
     const users = await api('/api/v1/users/');
+    currentUsersList = users;
+    const canEdit = currentUser?.role === 'superadmin';
     tbody.innerHTML = users.map(u => `
       <tr>
-        <td class="td-main">${u.username}</td>
-        <td>${u.email}</td>
+        <td class="td-main">${escapeHtml(u.username)}</td>
+        <td>${escapeHtml(u.email)}</td>
         <td>${roleBadge(u.role)}</td>
         <td><span class="dot ${u.is_active ? 'dot-green' : 'dot-red'}"></span> ${u.is_active ? 'Activo' : 'Inactivo'}</td>
         <td class="text-sm text-muted">-</td>
-        <td>
+        <td style="display:flex;gap:6px">
+          ${canEdit ? `<button class="btn btn-secondary btn-sm" onclick="openEditUserModal('${u.id}')">✏️ Editar</button>` : ''}
           <button class="btn btn-secondary btn-sm" onclick="toggleUser('${u.id}', ${u.is_active})">
             ${u.is_active ? 'Desactivar' : 'Activar'}
           </button>
@@ -1359,6 +1898,38 @@ async function toggleUser(userId, currentActive) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
+let editingUserId = null;
+
+function openEditUserModal(userId) {
+  const u = currentUsersList.find(x => x.id === userId);
+  if (!u) return;
+  editingUserId = userId;
+  document.getElementById('eu-username').value = u.username || '';
+  document.getElementById('eu-email').value = u.email || '';
+  document.getElementById('eu-fullname').value = u.full_name || '';
+  document.getElementById('eu-role').value = u.role || 'viewer';
+  document.getElementById('eu-password').value = '';
+  document.getElementById('modal-edit-user').classList.add('open');
+}
+
+async function saveUserEdit() {
+  const data = {
+    username: document.getElementById('eu-username').value.trim(),
+    email: document.getElementById('eu-email').value.trim(),
+    full_name: document.getElementById('eu-fullname').value.trim(),
+    role: document.getElementById('eu-role').value,
+  };
+  if (!data.username || !data.email) { toast('Completa username y email', 'error'); return; }
+  const password = document.getElementById('eu-password').value;
+  if (password) data.password = password;
+  try {
+    await api(`/api/v1/users/${editingUserId}`, 'PATCH', data);
+    closeModal('modal-edit-user');
+    toast('Usuario actualizado', 'success');
+    loadUsers();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // SETTINGS
 // ═══════════════════════════════════════════════════════════════
@@ -1388,14 +1959,23 @@ function switchBotTab(name, el) {
 // ═══════════════════════════════════════════════════════════════
 // UTILS
 // ═══════════════════════════════════════════════════════════════
-function updateModelOptions(providerId = 'cfg-provider', modelId = 'cfg-model') {
+const MODEL_CACHE = {}; // cache en memoria por proveedor, para no repetir el fetch en cada cambio de select
+
+async function updateModelOptions(providerId = 'cfg-provider', modelId = 'cfg-model') {
   const pv = document.getElementById(providerId)?.value || 'openai';
   const modelSel = document.getElementById(modelId);
   if (!modelSel) return;
-  modelSel.innerHTML = MODELS[pv].map(m => `<option value="${m}">${m}</option>`).join('');
+  if (!MODEL_CACHE[pv]) {
+    try {
+      const data = await api(`/api/v1/admin/ai-providers/${pv}/models`);
+      MODEL_CACHE[pv] = data.models;
+    } catch(e) { /* sin permiso o proveedor no configurado: seguimos con el listado local */ }
+  }
+  const models = MODEL_CACHE[pv] || MODELS[pv] || [];
+  modelSel.innerHTML = models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
 }
 
-function updateNewModelOptions() { updateModelOptions('new-bot-provider', 'new-bot-model'); }
+async function updateNewModelOptions() { await updateModelOptions('new-bot-provider', 'new-bot-model'); }
 
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
 

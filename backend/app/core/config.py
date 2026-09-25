@@ -60,8 +60,25 @@ class Settings(BaseSettings):
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_WINDOW_SECONDS: int = 60
 
+    # Activar SOLO si la app corre detrás de un proxy de confianza (el nginx de
+    # docker-compose.yml u otro): permite leer X-Forwarded-For/X-Real-IP para
+    # identificar al cliente real. Si se activa sin un proxy real por delante,
+    # cualquiera puede falsificar ese header y evadir el rate limit por completo.
+    TRUST_PROXY_HEADERS: bool = False
+
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "./logs/ragbot.log"
+
+    # ─── ALERTAS DE FALLO DEL BOT ───────────────────────────
+    ALERT_EMAIL_TO: str = ""          # destinatarios separados por coma; vacío = sin mail
+    ALERT_WEBHOOK_URL: str = ""       # Slack/Teams/Discord/etc. (POST JSON); vacío = sin webhook
+    ALERT_COOLDOWN_SECONDS: int = 600  # una alerta por bot y tipo de error cada N segundos
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_USE_TLS: bool = True         # STARTTLS (puerto 587); con puerto 465 se usa SSL
 
     @property
     def allowed_origins_list(self) -> List[str]:

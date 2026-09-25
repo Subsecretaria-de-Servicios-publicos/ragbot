@@ -48,9 +48,9 @@ class BaseAIProvider(ABC):
 
 # ─── OpenAI Provider ─────────────────────────────────────────
 class OpenAIProvider(BaseAIProvider):
-    def __init__(self):
+    def __init__(self, api_key: Optional[str] = None):
         from openai import AsyncOpenAI
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        self.client = AsyncOpenAI(api_key=api_key or settings.OPENAI_API_KEY)
 
     async def chat(self, messages, model="gpt-4o-mini", temperature=0.7, max_tokens=1000, stream=False) -> AIResponse:
         start = time.monotonic()
@@ -78,9 +78,9 @@ class OpenAIProvider(BaseAIProvider):
 
 # ─── Anthropic Provider ───────────────────────────────────────
 class AnthropicProvider(BaseAIProvider):
-    def __init__(self):
+    def __init__(self, api_key: Optional[str] = None):
         import anthropic
-        self.client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        self.client = anthropic.AsyncAnthropic(api_key=api_key or settings.ANTHROPIC_API_KEY)
 
     async def chat(self, messages, model="claude-3-haiku-20240307", temperature=0.7, max_tokens=1000, stream=False) -> AIResponse:
         start = time.monotonic()
@@ -119,9 +119,9 @@ class AnthropicProvider(BaseAIProvider):
 
 # ─── Google Provider ──────────────────────────────────────────
 class GoogleProvider(BaseAIProvider):
-    def __init__(self):
+    def __init__(self, api_key: Optional[str] = None):
         import google.generativeai as genai
-        genai.configure(api_key=settings.GOOGLE_API_KEY)
+        genai.configure(api_key=api_key or settings.GOOGLE_API_KEY)
         self.genai = genai
 
     @retry(
@@ -171,9 +171,9 @@ class GoogleProvider(BaseAIProvider):
 
 # ─── Ollama Provider (local) ──────────────────────────────────
 class OllamaProvider(BaseAIProvider):
-    def __init__(self):
+    def __init__(self, base_url: Optional[str] = None):
         import httpx
-        self.base_url = settings.OLLAMA_BASE_URL
+        self.base_url = base_url or settings.OLLAMA_BASE_URL
         self.client = httpx.AsyncClient(timeout=120)
 
     async def chat(self, messages, model="llama3", temperature=0.7, max_tokens=1000, stream=False) -> AIResponse:
@@ -204,20 +204,24 @@ class OllamaProvider(BaseAIProvider):
 class AIService:
     _providers: dict[str, BaseAIProvider] = {}
 
+    @staticmethod
+    def _build_provider(provider: str, api_key: Optional[str] = None, base_url: Optional[str] = None) -> BaseAIProvider:
+        match provider:
+            case "openai":
+                return OpenAIProvider(api_key=api_key)
+            case "anthropic":
+                return AnthropicProvider(api_key=api_key)
+            case "google":
+                return GoogleProvider(api_key=api_key)
+            case "ollama":
+                return OllamaProvider(base_url=base_url)
+            case _:
+                raise ValueError(f"Proveedor IA desconocido: {provider}")
+
     @classmethod
     def get_provider(cls, provider: str) -> BaseAIProvider:
         if provider not in cls._providers:
-            match provider:
-                case "openai":
-                    cls._providers[provider] = OpenAIProvider()
-                case "anthropic":
-                    cls._providers[provider] = AnthropicProvider()
-                case "google":
-                    cls._providers[provider] = GoogleProvider()
-                case "ollama":
-                    cls._providers[provider] = OllamaProvider()
-                case _:
-                    raise ValueError(f"Proveedor IA desconocido: {provider}")
+            cls._providers[provider] = cls._build_provider(provider)
         return cls._providers[provider]
 
     @classmethod
@@ -228,12 +232,17 @@ class AIService:
         messages: list[ChatMessage],
         temperature: float = 0.7,
         max_tokens: int = 1000,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
     ) -> AIResponse:
         # Reintentos genéricos para errores temporales (red, timeouts, etc.)
         # El proveedor Google tiene sus propios reintentos específicos para cuotas.
         @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
         async def _call():
-            p = cls.get_provider(provider)
+            # Si hay override (key/base_url configurados en BD por el superadmin), construir
+            # una instancia nueva en vez de usar el singleton cacheado (que sigue sirviendo
+            # a bots que no configuraron nada y usan las credenciales de .env).
+            p = cls._build_provider(provider, api_key, base_url) if (api_key or base_url) else cls.get_provider(provider)
             return await p.chat(messages, model=model, temperature=temperature, max_tokens=max_tokens)
 
         try:

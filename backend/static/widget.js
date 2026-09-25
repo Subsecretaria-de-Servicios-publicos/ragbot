@@ -68,11 +68,13 @@
 
     /* Header */
     #rb-header {
-      background: var(--rb-color, #6c63ff);
+      background: linear-gradient(135deg, var(--rb-color, #6c63ff), var(--rb-color2, #a78bfa));
       padding: 14px 16px;
       display: flex; align-items: center; gap: 10px;
       flex-shrink: 0;
     }
+    #rb-gov-logo { height: 26px; width: auto; border-radius: 4px; flex-shrink: 0; }
+    #rb-org-logo { height: 26px; width: auto; border-radius: 4px; flex-shrink: 0; }
     #rb-avatar {
       width: 36px; height: 36px; border-radius: 50%;
       background: rgba(255,255,255,0.25);
@@ -120,7 +122,7 @@
       line-height: 1.5;
     }
     .rb-msg.bot .rb-bubble {
-      background: #f5f5f8;
+      background: var(--rb-bubble-bg, #f5f5f8);
       border-bottom-left-radius: 4px;
       color: #1a1a2e;
     }
@@ -184,14 +186,6 @@
     #rb-footer { padding: 6px 12px 10px; text-align: center; }
     #rb-footer a { font-size: 10px; color: #ccc; text-decoration: none; }
     #rb-footer a:hover { color: #999; }
-
-    /* Welcome card */
-    .rb-welcome {
-      background: linear-gradient(135deg, var(--rb-color, #6c63ff), #a78bfa);
-      border-radius: 12px; padding: 16px; color: #fff; margin-bottom: 4px;
-    }
-    .rb-welcome-title { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
-    .rb-welcome-sub { font-size: 12px; opacity: 0.85; }
   `;
 
   // ─── RAGBot Widget Class ────────────────────────────────────
@@ -201,11 +195,15 @@
         botId: config.botId,
         apiUrl: (config.apiUrl || 'http://localhost:8000').replace(/\/$/, ''),
         primaryColor: config.primaryColor || '#6c63ff',
+        secondaryColor: config.secondaryColor || '#a78bfa',
         position: config.position || 'bottom-right',
         botName: config.botName || 'Asistente',
         welcomeMessage: config.welcomeMessage || '¡Hola! ¿En qué puedo ayudarte?',
         botAvatar: config.botAvatar || '🤖',
+        govLogoUrl: config.govLogoUrl || null,
+        orgLogoUrl: config.orgLogoUrl || null,
         showBranding: config.showBranding !== false,
+        apiKey: config.apiKey || null,
       };
       this.sessionId = this._getSessionId();
       this.isOpen = false;
@@ -232,8 +230,21 @@
       style.textContent = CSS.replace(/var\(--rb-color, #6c63ff\)/g, `var(--rb-color, ${this.config.primaryColor})`);
       document.head.appendChild(style);
 
-      // Set CSS var
+      // Set CSS vars
       document.documentElement.style.setProperty('--rb-color', this.config.primaryColor);
+      document.documentElement.style.setProperty('--rb-color2', this.config.secondaryColor);
+      document.documentElement.style.setProperty('--rb-bubble-bg', this._tintColor(this.config.secondaryColor, 0.85));
+    }
+
+    // Mezcla un color hex con blanco (amount=1 -> blanco puro) para un tono pastel
+    // siempre legible con texto oscuro, sin importar cuán saturado sea el color elegido.
+    _tintColor(hexColor, amount = 0.85) {
+      let h = (hexColor || '').replace('#', '');
+      if (h.length === 3) h = h.split('').map(c => c + c).join('');
+      if (!/^[0-9a-fA-F]{6}$/.test(h)) return '#f5f5f8';
+      const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+      const mix = c => Math.round(c + (255 - c) * amount).toString(16).padStart(2, '0');
+      return `#${mix(r)}${mix(g)}${mix(b)}`;
     }
 
     _render() {
@@ -247,11 +258,13 @@
         </button>
 
         <!-- Chat Window -->
-        <div id="ragbot-window" class="${this.config.position}" role="dialog" aria-label="Chat con ${this.config.botName}">
+        <div id="ragbot-window" class="${this.config.position}" role="dialog" aria-label="Chat con ${this._escapeHtml(this.config.botName)}">
           <div id="rb-header">
-            <div id="rb-avatar">${this.config.botAvatar}</div>
+            ${this._govLogoHtml()}
+            ${this._orgLogoHtml()}
+            <div id="rb-avatar">${this._avatarHtml(this.config.botAvatar)}</div>
             <div id="rb-header-info">
-              <div id="rb-bot-name">${this.config.botName}</div>
+              <div id="rb-bot-name">${this._escapeHtml(this.config.botName)}</div>
               <div id="rb-status"><span class="rb-dot"></span> En línea</div>
             </div>
             <button id="rb-close-btn" aria-label="Cerrar">✕</button>
@@ -286,13 +299,6 @@
     }
 
     _addWelcomeMessage() {
-      const msgEl = document.createElement('div');
-      msgEl.innerHTML = `
-        <div class="rb-welcome">
-          <div class="rb-welcome-title">${this.config.botName}</div>
-          <div class="rb-welcome-sub">Estoy aquí para ayudarte</div>
-        </div>`;
-      this.elements.messages.appendChild(msgEl);
       this._appendMessage('bot', this.config.welcomeMessage);
       // Show badge after 2s
       setTimeout(() => {
@@ -343,9 +349,11 @@
       this.isTyping = true;
 
       try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (this.config.apiKey) headers['X-API-Key'] = this.config.apiKey;
         const res = await fetch(`${this.config.apiUrl}/api/v1/chat/${this.config.botId}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ message: text, session_id: this.sessionId }),
         });
 
@@ -369,11 +377,11 @@
 
       const time = new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
       const sourcesHtml = sources.length
-        ? `<div class="rb-sources">${sources.map(s => `<span class="rb-source-tag">📎 ${s}</span>`).join('')}</div>`
+        ? `<div class="rb-sources">${sources.map(s => `<span class="rb-source-tag">📎 ${this._escapeHtml(s)}</span>`).join('')}</div>`
         : '';
 
       el.innerHTML = `
-        <div class="rb-msg-avatar">${role === 'bot' ? this.config.botAvatar : '👤'}</div>
+        <div class="rb-msg-avatar">${role === 'bot' ? this._avatarHtml(this.config.botAvatar) : '👤'}</div>
         <div>
           <div class="rb-bubble${isError ? ' style="background:#fff0f0;color:#ef4444"' : ''}">${this._escapeHtml(content)}${sourcesHtml}</div>
           <div class="rb-time">${time}</div>
@@ -389,7 +397,7 @@
       el.className = 'rb-msg bot';
       el.id = 'rb-typing-indicator';
       el.innerHTML = `
-        <div class="rb-msg-avatar">${this.config.botAvatar}</div>
+        <div class="rb-msg-avatar">${this._avatarHtml(this.config.botAvatar)}</div>
         <div class="rb-typing"><span></span><span></span><span></span></div>`;
       this.elements.messages.appendChild(el);
       this.elements.messages.scrollTop = this.elements.messages.scrollHeight;
@@ -397,6 +405,29 @@
 
     _hideTyping() {
       document.getElementById('rb-typing-indicator')?.remove();
+    }
+
+    _avatarHtml(value) {
+      if (!value) return '🤖';
+      if (/^https?:\/\//.test(value) || value.startsWith('/')) {
+        const src = value.startsWith('/') ? this.config.apiUrl + value : value;
+        return `<img src="${this._escapeHtml(src)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;display:block">`;
+      }
+      return this._escapeHtml(value);
+    }
+
+    _govLogoHtml() {
+      if (!this.config.govLogoUrl) return '';
+      const url = this.config.govLogoUrl;
+      const src = url.startsWith('/') ? this.config.apiUrl + url : url;
+      return `<img id="rb-gov-logo" src="${this._escapeHtml(src)}" alt="Gobierno de Salta">`;
+    }
+
+    _orgLogoHtml() {
+      if (!this.config.orgLogoUrl) return '';
+      const url = this.config.orgLogoUrl;
+      const src = url.startsWith('/') ? this.config.apiUrl + url : url;
+      return `<img id="rb-org-logo" src="${this._escapeHtml(src)}" alt="Logo del organismo">`;
     }
 
     _escapeHtml(str) {
