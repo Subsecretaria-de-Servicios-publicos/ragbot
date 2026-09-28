@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status,
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from sqlalchemy import select, func, update, delete, text, or_
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, field_validator
 import structlog
 
 from app.db.session import get_db
@@ -81,6 +81,19 @@ class ChatbotCreate(BaseModel):
     top_k: int = 5
     similarity_threshold: float = 0.7
     is_public: bool = False
+    suggested_questions: Optional[list[str]] = None  # hasta 3, se muestran como botones al inicio del chat
+
+    @field_validator("suggested_questions")
+    @classmethod
+    def _check_suggested_questions(cls, v):
+        if v is None:
+            return v
+        v = [q.strip() for q in v if q and q.strip()]
+        if len(v) > 3:
+            raise ValueError(f"Máximo 3 preguntas disparadoras")
+        if any(len(q) > 150 for q in v):
+            raise ValueError(f"Cada pregunta disparadora puede tener hasta 150 caracteres")
+        return v  # [] explícito borra (no None: exclude_none del PATCH lo descartaría)
 
 class ChatbotUpdate(BaseModel):
     name: Optional[str] = None
@@ -98,6 +111,19 @@ class ChatbotUpdate(BaseModel):
     is_active: Optional[bool] = None
     is_public: Optional[bool] = None
     monthly_token_limit: Optional[int] = None  # solo admin; 0 = sin límite
+    suggested_questions: Optional[list[str]] = None  # hasta 3, [] o null = sin sugerencias
+
+    @field_validator("suggested_questions")
+    @classmethod
+    def _check_suggested_questions(cls, v):
+        if v is None:
+            return v
+        v = [q.strip() for q in v if q and q.strip()]
+        if len(v) > 3:
+            raise ValueError(f"Máximo 3 preguntas disparadoras")
+        if any(len(q) > 150 for q in v):
+            raise ValueError(f"Cada pregunta disparadora puede tener hasta 150 caracteres")
+        return v  # [] explícito borra (no None: exclude_none del PATCH lo descartaría)
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -227,7 +253,7 @@ def _make_slug(name: str) -> str:
 # Campos que un usuario asignado (no dueño, no admin/superadmin) puede editar de un bot.
 # El resto (proveedor/modelo de IA, temperatura, is_public, is_active, etc.) queda reservado
 # a admin/superadmin — separa "qué bot puede tocar" (asignación) de "qué le permite su rol".
-ASSIGNEE_EDITABLE_FIELDS = {"description", "system_prompt", "welcome_message", "bot_name", "widget_config"}
+ASSIGNEE_EDITABLE_FIELDS = {"description", "system_prompt", "welcome_message", "bot_name", "widget_config", "suggested_questions"}
 
 
 async def _is_assigned(bot_id: str, user_id: str, db: AsyncSession) -> bool:
@@ -297,6 +323,7 @@ async def get_chatbot(bot_id: str, payload: dict = Depends(get_current_user_payl
         "bot_name": bot.bot_name, "bot_avatar_url": bot.bot_avatar_url, "org_logo_url": bot.org_logo_url,
         "widget_config": bot.widget_config, "top_k": bot.top_k,
         "similarity_threshold": bot.similarity_threshold,
+        "suggested_questions": bot.suggested_questions or [],
         "total_conversations": bot.total_conversations,
         "total_messages": bot.total_messages,
         "total_tokens_used": bot.total_tokens_used,
@@ -640,6 +667,7 @@ async def get_widget_script(bot_id: str, request: Request, key: Optional[str] = 
         "govLogoUrl": _gov_logo_url(),  # path "/static/branding/..." (relativo a apiUrl) o null
         "footerLogoUrl": _footer_logo_url(),  # logo de Modernización (pie del chat), idem
         "orgLogoUrl": bot.org_logo_url,  # logo del organismo/secretaría dueña de este bot
+        "suggestedQuestions": bot.suggested_questions or [],  # hasta 3 botones de pregunta al inicio del chat
         "welcomeMessage": bot.welcome_message,
         "primaryColor": widget_config.get("primary_color", "#6c63ff"),
         "secondaryColor": widget_config.get("secondary_color", "#a78bfa"),
@@ -1034,6 +1062,11 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
   .footer-logo {{ background: linear-gradient(135deg, var(--color), var(--color2)); padding: 10px 16px;
                   display: flex; justify-content: center; align-items: center; flex-shrink: 0; }}
   .footer-logo img {{ max-height: 28px; max-width: 75%; width: auto; object-fit: contain; display: block; }}
+  .suggestions {{ display: flex; flex-direction: column; gap: 8px; padding: 0 20px 4px 58px; }}
+  .suggestion-btn {{ align-self: flex-start; background: #fff; border: 1.5px solid var(--color);
+                     color: var(--color); border-radius: 14px; padding: 8px 14px; font-size: 13px;
+                     text-align: left; cursor: pointer; transition: background 0.15s, color 0.15s; }}
+  .suggestion-btn:hover {{ background: var(--color); color: #fff; }}
 </style>
 </head>
 <body>
@@ -1086,10 +1119,28 @@ function addMsg(role, content, sources) {{
 // Mensaje de bienvenida
 addMsg("bot", {welcome_message_js});
 
-async function send() {{
+// Preguntas disparadoras: botones para arrancar la charla sin tener que escribir
+const SUGGESTED_QUESTIONS = {suggested_questions_js};
+function renderSuggestions() {{
+  if (!SUGGESTED_QUESTIONS.length) return;
+  const wrap = document.createElement("div");
+  wrap.className = "suggestions";
+  wrap.id = "suggestions";
+  wrap.innerHTML = SUGGESTED_QUESTIONS.map(q =>
+    `<button type="button" class="suggestion-btn">${{esc(q)}}</button>`
+  ).join("");
+  document.getElementById("msgs").appendChild(wrap);
+  wrap.querySelectorAll(".suggestion-btn").forEach((btn, i) => {{
+    btn.addEventListener("click", () => send(SUGGESTED_QUESTIONS[i]));
+  }});
+}}
+renderSuggestions();
+
+async function send(presetText) {{
   const inp = document.getElementById("inp");
-  const txt = inp.value.trim();
+  const txt = (presetText !== undefined ? presetText : inp.value).trim();
   if (!txt || busy) return;
+  document.getElementById("suggestions")?.remove();
   inp.value = ""; inp.style.height = "auto";
   addMsg("user", txt);
   // Typing indicator
@@ -1116,7 +1167,7 @@ async function send() {{
   }} finally {{ busy = false; }}
 }}
 
-document.getElementById("send").addEventListener("click", send);
+document.getElementById("send").addEventListener("click", () => send());
 document.getElementById("inp").addEventListener("keydown", e => {{
   if (e.key === "Enter" && !e.shiftKey) {{ e.preventDefault(); send(); }}
 }});
@@ -1218,6 +1269,7 @@ async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db
         avatar_js=js_str(avatar_html)[1:-1],  # sin comillas: se inserta dentro de un template literal ya entrecomillado
         api_url_js=js_str(api_url),
         api_key_js=js_str(key) if key else "null",
+        suggested_questions_js=json.dumps(bot.suggested_questions or []).replace("</", "<\/"),
     )
     return HTMLResponse(content=page_html)
 

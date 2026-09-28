@@ -99,6 +99,10 @@ class Chatbot(Base):
     widget_config: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
     # Ejemplo: {"primary_color": "#3B82F6", "position": "bottom-right", "show_branding": true}
 
+    # Preguntas disparadoras (hasta 3) que se muestran como botones al inicio del chat, para
+    # guiar al usuario sobre qué puede preguntarle al bot. Ej: ["¿Quién fue Güemes?", ...]
+    suggested_questions: Mapped[Optional[list]] = mapped_column(JSONB)
+
     # RAG Config
     top_k: Mapped[int] = mapped_column(Integer, default=5)
     similarity_threshold: Mapped[float] = mapped_column(Float, default=0.7)

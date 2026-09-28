@@ -143,6 +143,14 @@
 
     .rb-time { font-size: 10px; color: #bbb; margin-top: 4px; text-align: right; }
 
+    .rb-suggestions { display: flex; flex-direction: column; gap: 6px; padding: 0 16px 4px 44px; }
+    .rb-suggestion-btn {
+      align-self: flex-start; background: #fff; border: 1.5px solid var(--rb-color, #6c63ff);
+      color: var(--rb-color, #6c63ff); border-radius: 14px; padding: 7px 12px; font-size: 12.5px;
+      text-align: left; cursor: pointer; transition: background 0.15s, color 0.15s;
+    }
+    .rb-suggestion-btn:hover { background: var(--rb-color, #6c63ff); color: #fff; }
+
     /* Typing indicator */
     .rb-typing { display: flex; align-items: center; gap: 4px; padding: 10px 14px;
       background: #f5f5f8; border-radius: 16px; border-bottom-left-radius: 4px; width: fit-content; }
@@ -209,6 +217,7 @@
         govLogoUrl: config.govLogoUrl || null,
         footerLogoUrl: config.footerLogoUrl || null,
         orgLogoUrl: config.orgLogoUrl || null,
+        suggestedQuestions: Array.isArray(config.suggestedQuestions) ? config.suggestedQuestions.slice(0,3) : [],
         showBranding: config.showBranding !== false,
         apiKey: config.apiKey || null,
       };
@@ -307,10 +316,26 @@
 
     _addWelcomeMessage() {
       this._appendMessage('bot', this.config.welcomeMessage);
+      this._renderSuggestions();
       // Show badge after 2s
       setTimeout(() => {
         this.elements.badge.style.display = 'flex';
       }, 2000);
+    }
+
+    _renderSuggestions() {
+      if (!this.config.suggestedQuestions.length) return;
+      const wrap = document.createElement('div');
+      wrap.className = 'rb-suggestions';
+      wrap.id = 'rb-suggestions';
+      wrap.innerHTML = this.config.suggestedQuestions
+        .map(q => `<button type="button" class="rb-suggestion-btn">${this._escapeHtml(q)}</button>`)
+        .join('');
+      wrap.querySelectorAll('.rb-suggestion-btn').forEach((btn, i) => {
+        btn.addEventListener('click', () => this._sendMessage(this.config.suggestedQuestions[i]));
+      });
+      this.elements.messages.appendChild(wrap);
+      this.elements.messages.scrollTop = this.elements.messages.scrollHeight;
     }
 
     _bindEvents() {
@@ -345,10 +370,11 @@
       this.elements.triggerIcon.textContent = '💬';
     }
 
-    async _sendMessage() {
-      const text = this.elements.input.value.trim();
+    async _sendMessage(presetText) {
+      const text = (presetText !== undefined ? presetText : this.elements.input.value).trim();
       if (!text || this.isTyping) return;
 
+      document.getElementById('rb-suggestions')?.remove();
       this.elements.input.value = '';
       this.elements.input.style.height = 'auto';
       this._appendMessage('user', text);
