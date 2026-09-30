@@ -16,6 +16,11 @@ from app.services.bot_keys import require_bot_api_key, enforce_monthly_limit, re
 
 logger = structlog.get_logger()
 
+# Frase exacta que el bot usa cuando no tiene la información (instruida en ambos templates de
+# abajo). El backend la detecta para ofrecer el contacto humano de forma determinística — no
+# depende de que el modelo "se acuerde" de mencionarlo, ni le confiamos a él los datos de contacto.
+NO_INFO_MARKER = "no tengo información sobre eso en mis documentos"
+
 # Reglas anti prompt-injection / anti fuga de información — se agregan a TODOS los bots,
 # antes de la personalidad configurada por cada uno. Sin llaves {} para no romper el
 # .format() de los templates que la incluyen.
@@ -33,7 +38,7 @@ RAG_SYSTEM_TEMPLATE = """Eres {bot_name}, un asistente especializado. {personali
 
 INSTRUCCIONES:
 - Responde ÚNICAMENTE basándote en el contexto proporcionado
-- Si la información no está en el contexto, dilo claramente: "No tengo información sobre eso en mis documentos"
+- Si la información no está en el contexto, respondé EXACTAMENTE (sin agregar nada más en esa oración): "No tengo información sobre eso en mis documentos."
 - Sé conciso, claro y útil
 - Cita la fuente cuando sea relevante (página, documento)
 - Idioma: responde siempre en el mismo idioma del usuario
@@ -48,8 +53,9 @@ NO_CONTEXT_SYSTEM_TEMPLATE = """Eres {bot_name}. {personality}
 
 No se encontró información relevante en los documentos cargados para esta consulta.
 Si el usuario hace un saludo o una charla general, respóndele con normalidad. Si pregunta por datos,
-hechos o contenido que deberían estar en los documentos, NO inventes ni respondas de memoria: dile que no
-encontraste esa información en los documentos y sugiérele reformular la pregunta."""
+hechos o contenido que deberían estar en los documentos, NO inventes ni respondas de memoria: respondé
+EXACTAMENTE (sin agregar nada más en esa oración) "No tengo información sobre eso en mis documentos." y
+sugerí reformular la pregunta en la oración siguiente."""
 
 
 class ChatService:
@@ -199,6 +205,12 @@ Solo JSON, sin markdown ni explicaciones extra."""
         # 6. Parsear respuesta JSON del LLM
         answer_text, sources, confidence = self._parse_json_response(ai_response.content)
 
+        # El bot no encontró la respuesta (frase exacta instruida arriba): ofrecer el contacto
+        # humano del bot, si tiene alguno cargado. Determinístico — no depende del LLM ni le
+        # confiamos a él los datos de contacto (los pone el frontend, ya validados).
+        could_not_answer = NO_INFO_MARKER in answer_text.lower()
+        suggest_contact = could_not_answer and bool(chatbot.contact_email or chatbot.contact_whatsapp)
+
         total_ms = int((time.monotonic() - start) * 1000)
 
         # 7. Guardar mensajes en BD
@@ -251,6 +263,7 @@ Solo JSON, sin markdown ni explicaciones extra."""
             "latency_ms": total_ms,
             "model": f"{chatbot.ai_provider.value}/{chatbot.ai_model}",
             "context_used": len(rag_chunks) > 0,
+            "suggest_contact": suggest_contact,
         }
 
     def _parse_json_response(self, raw: str) -> tuple[str, list, float]:

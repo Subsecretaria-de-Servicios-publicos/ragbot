@@ -1142,6 +1142,15 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
   }}
   #help-menu a:last-child {{ border-bottom: none; }}
   #help-menu a:hover {{ background: #f8f8fc; }}
+  .contact-prompt {{ margin-top: 6px; font-size: 11px; color: #999; }}
+  .contact-chips {{ display: flex; gap: 6px; margin-top: 5px; flex-wrap: wrap; }}
+  .contact-chip {{
+    display: inline-flex; align-items: center; gap: 4px; background: #fff;
+    border: 1.5px solid var(--color); color: var(--color); border-radius: 12px;
+    padding: 5px 10px; font-size: 11.5px; text-decoration: none;
+    transition: background 0.15s, color 0.15s;
+  }}
+  .contact-chip:hover {{ background: var(--color); color: #fff; }}
 </style>
 </head>
 <body>
@@ -1171,6 +1180,9 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
 const API = {api_url_js};
 const BOT_ID = {bot_id_js};
 const API_KEY = {api_key_js};
+const CONTACT_EMAIL = {contact_email_js};
+const CONTACT_WHATSAPP = {contact_whatsapp_js};
+const BOT_NAME_JS = {bot_name_js};
 const SESSION = "pg_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
 let busy = false;
 
@@ -1180,15 +1192,31 @@ function esc(s) {{
   ));
 }}
 
-function addMsg(role, content, sources) {{
+// Chips de contacto inline, debajo de un mensaje puntual donde el bot no encontró la
+// respuesta (suggest_contact del backend). Vacío si el bot no tiene contacto configurado.
+function contactChipsHtml() {{
+  if (!CONTACT_EMAIL && !CONTACT_WHATSAPP) return "";
+  const items = [];
+  if (CONTACT_EMAIL) {{
+    const subject = encodeURIComponent("Consulta sobre " + BOT_NAME_JS);
+    items.push(`<a class="contact-chip" href="mailto:${{CONTACT_EMAIL}}?subject=${{subject}}">✉️ Email</a>`);
+  }}
+  if (CONTACT_WHATSAPP) {{
+    items.push(`<a class="contact-chip" href="https://wa.me/${{CONTACT_WHATSAPP}}" target="_blank" rel="noopener">🟢 WhatsApp</a>`);
+  }}
+  return `<div class="contact-prompt">¿No era lo que buscabas?<div class="contact-chips">${{items.join("")}}</div></div>`;
+}}
+
+function addMsg(role, content, sources, suggestContact) {{
   const m = document.getElementById("msgs");
   const time = new Date().toLocaleTimeString("es", {{hour:"2-digit",minute:"2-digit"}});
   const srcs = (sources||[]).map(s=>`<span class="src">📎 ${{esc(s)}}</span>`).join("");
+  const contact = suggestContact ? contactChipsHtml() : "";
   const d = document.createElement("div");
   d.className = "msg " + role;
   d.innerHTML = `<div class="msg-av">${{role==="bot"?"{avatar_js}":"👤"}}</div>
     <div><div class="bubble">${{esc(content).replace(/\\n/g,"<br>")}}${{srcs?`<div class="sources">${{srcs}}</div>`:""}}</div>
-    <div class="msg-time">${{time}}</div></div>`;
+    <div class="msg-time">${{time}}</div>${{contact}}</div>`;
   m.appendChild(d);
   m.scrollTop = m.scrollHeight;
 }}
@@ -1237,7 +1265,7 @@ async function send(presetText) {{
     const data = await res.json();
     document.getElementById("typing")?.remove();
     if (!res.ok) throw new Error(data.detail || "Error");
-    addMsg("bot", data.answer, data.sources);
+    addMsg("bot", data.answer, data.sources, data.suggest_contact);
   }} catch(e) {{
     document.getElementById("typing")?.remove();
     addMsg("bot", "Error al procesar tu consulta: " + e.message);
@@ -1375,6 +1403,9 @@ async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db
         suggested_questions_js=json.dumps(bot.suggested_questions or []).replace("</", "<\/"),
         help_button_html=help_button_html,
         help_menu_html=help_menu_html,
+        contact_email_js=js_str(bot.contact_email or ""),
+        contact_whatsapp_js=js_str(bot.contact_whatsapp or ""),
+        bot_name_js=js_str(bot.bot_name or bot.name),
     )
     return HTMLResponse(content=page_html)
 

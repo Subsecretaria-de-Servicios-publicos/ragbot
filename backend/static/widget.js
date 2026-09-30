@@ -162,6 +162,16 @@
 
     .rb-time { font-size: 10px; color: #bbb; margin-top: 4px; text-align: right; }
 
+    .rb-contact-prompt { margin-top: 6px; font-size: 11px; color: #999; }
+    .rb-contact-chips { display: flex; gap: 6px; margin-top: 5px; flex-wrap: wrap; }
+    .rb-contact-chip {
+      display: inline-flex; align-items: center; gap: 4px; background: #fff;
+      border: 1.5px solid var(--rb-color, #6c63ff); color: var(--rb-color, #6c63ff);
+      border-radius: 12px; padding: 5px 10px; font-size: 11.5px; text-decoration: none;
+      transition: background 0.15s, color 0.15s;
+    }
+    .rb-contact-chip:hover { background: var(--rb-color, #6c63ff); color: #fff; }
+
     .rb-suggestions { display: flex; flex-direction: column; gap: 6px; padding: 0 16px 4px 44px; }
     .rb-suggestion-btn {
       align-self: flex-start; background: #fff; border: 1.5px solid var(--rb-color, #6c63ff);
@@ -424,7 +434,7 @@
 
         if (!res.ok) throw new Error(data.detail || 'Error del servidor');
 
-        this._appendMessage('bot', data.answer, data.sources || []);
+        this._appendMessage('bot', data.answer, data.sources || [], false, data.suggest_contact);
       } catch(err) {
         this._hideTyping();
         this._appendMessage('bot', `Lo siento, ocurrió un error. ${err.message}`, [], true);
@@ -433,7 +443,7 @@
       }
     }
 
-    _appendMessage(role, content, sources = [], isError = false) {
+    _appendMessage(role, content, sources = [], isError = false, suggestContact = false) {
       const el = document.createElement('div');
       el.className = `rb-msg ${role}`;
 
@@ -441,17 +451,34 @@
       const sourcesHtml = sources.length
         ? `<div class="rb-sources">${sources.map(s => `<span class="rb-source-tag">📎 ${this._escapeHtml(s)}</span>`).join('')}</div>`
         : '';
+      const contactHtml = suggestContact ? this._contactChipsHtml() : '';
 
       el.innerHTML = `
         <div class="rb-msg-avatar">${role === 'bot' ? this._avatarHtml(this.config.botAvatar) : '👤'}</div>
         <div>
           <div class="rb-bubble${isError ? ' style="background:#fff0f0;color:#ef4444"' : ''}">${this._escapeHtml(content)}${sourcesHtml}</div>
           <div class="rb-time">${time}</div>
+          ${contactHtml}
         </div>`;
 
       this.elements.messages.appendChild(el);
       this.elements.messages.scrollTop = this.elements.messages.scrollHeight;
       this.messages.push({ role, content, time });
+    }
+
+    // Chips de contacto inline, debajo de un mensaje puntual donde el bot no encontró la
+    // respuesta (suggest_contact del backend). Vacío si el bot no tiene contacto configurado.
+    _contactChipsHtml() {
+      if (!this.config.contactEmail && !this.config.contactWhatsapp) return '';
+      const items = [];
+      if (this.config.contactEmail) {
+        const subject = encodeURIComponent(`Consulta sobre ${this.config.botName}`);
+        items.push(`<a class="rb-contact-chip" href="mailto:${this._escapeHtml(this.config.contactEmail)}?subject=${subject}">✉️ Email</a>`);
+      }
+      if (this.config.contactWhatsapp) {
+        items.push(`<a class="rb-contact-chip" href="https://wa.me/${this._escapeHtml(this.config.contactWhatsapp)}" target="_blank" rel="noopener">🟢 WhatsApp</a>`);
+      }
+      return `<div class="rb-contact-prompt">¿No era lo que buscabas?<div class="rb-contact-chips">${items.join('')}</div></div>`;
     }
 
     _showTyping() {
