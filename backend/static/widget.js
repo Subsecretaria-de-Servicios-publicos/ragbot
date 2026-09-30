@@ -219,6 +219,14 @@
     }
     #rb-send:hover { filter: brightness(1.1); transform: scale(1.05); }
     #rb-send svg { width: 16px; height: 16px; }
+    #rb-attach {
+      width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+      background: #f0f0f5; border: none; cursor: pointer; font-size: 16px;
+      display: flex; align-items: center; justify-content: center; transition: background 0.15s;
+    }
+    #rb-attach:hover { background: #e5e5ef; }
+    #rb-attach:disabled { opacity: 0.5; cursor: wait; }
+    .rb-upload-note { font-size: 11px; color: #999; padding: 0 16px 6px; }
 
     #rb-footer { padding: 6px 12px 10px; text-align: center; }
     #rb-footer a { font-size: 10px; color: #ccc; text-decoration: none; }
@@ -247,6 +255,8 @@
         footerLogoUrl: config.footerLogoUrl || null,
         contactEmail: config.contactEmail || null,
         contactWhatsapp: config.contactWhatsapp || null,  // solo dígitos con código de país
+        allowUserUploads: !!config.allowUserUploads,  // permite subir un PDF en el chat
+        chatUploadMaxMb: config.chatUploadMaxMb || 8,
         orgLogoUrl: config.orgLogoUrl || null,
         suggestedQuestions: Array.isArray(config.suggestedQuestions) ? config.suggestedQuestions.slice(0,3) : [],
         showBranding: config.showBranding !== false,
@@ -322,6 +332,8 @@
           <div id="rb-messages" role="log" aria-live="polite"></div>
 
           <div id="rb-input-area">
+            ${this.config.allowUserUploads ? `<input type="file" id="rb-file-input" accept="application/pdf" style="display:none">
+            <button type="button" id="rb-attach" aria-label="Adjuntar PDF" title="Adjuntar PDF">📎</button>` : ''}
             <textarea id="rb-input" placeholder="Escribe tu pregunta..." rows="1" maxlength="2000"></textarea>
             <button id="rb-send" aria-label="Enviar">
               <svg fill="none" stroke="#fff" stroke-width="2" viewBox="0 0 24 24">
@@ -386,6 +398,16 @@
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this._sendMessage(); }
       });
 
+      const attachBtn = document.getElementById('rb-attach');
+      if (attachBtn) {
+        const fileInput = document.getElementById('rb-file-input');
+        attachBtn.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => {
+          if (fileInput.files[0]) this._uploadPdf(fileInput.files[0]);
+          fileInput.value = '';
+        });
+      }
+
       // Auto-resize textarea
       this.elements.input.addEventListener('input', () => {
         this.elements.input.style.height = 'auto';
@@ -440,6 +462,48 @@
         this._appendMessage('bot', `Lo siento, ocurrió un error. ${err.message}`, [], true);
       } finally {
         this.isTyping = false;
+      }
+    }
+
+    async _uploadPdf(file) {
+      if (this.isTyping) return;
+      // No confiamos solo en file.type (algunos navegadores/SO lo dejan vacío o distinto para
+      // PDFs); la extensión alcanza para el chequeo rápido del cliente, el servidor valida la
+      // firma real del archivo.
+      if (file.type && file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) {
+        this._appendMessage('bot', 'Solo se aceptan archivos PDF.', [], true);
+        return;
+      }
+      if (file.size > this.config.chatUploadMaxMb * 1024 * 1024) {
+        this._appendMessage('bot', `El archivo supera el límite de ${this.config.chatUploadMaxMb}MB.`, [], true);
+        return;
+      }
+
+      this._appendMessage('user', `📎 ${file.name}`);
+      this._showTyping();
+      this.isTyping = true;
+      document.getElementById('rb-attach').disabled = true;
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('session_id', this.sessionId);
+        const headers = {};
+        if (this.config.apiKey) headers['X-API-Key'] = this.config.apiKey;
+        const res = await fetch(`${this.config.apiUrl}/api/v1/chat/${this.config.botId}/upload`, {
+          method: 'POST', headers, body: formData,
+        });
+        const data = await res.json();
+        this._hideTyping();
+        if (!res.ok) throw new Error(data.detail || 'Error al procesar el documento');
+        this._appendMessage('bot', data.message);
+      } catch(err) {
+        this._hideTyping();
+        this._appendMessage('bot', `No pude procesar el documento. ${err.message}`, [], true);
+      } finally {
+        this.isTyping = false;
+        const btn = document.getElementById('rb-attach');
+        if (btn) btn.disabled = false;
       }
     }
 

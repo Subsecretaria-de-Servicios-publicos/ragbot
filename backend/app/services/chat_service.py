@@ -96,6 +96,24 @@ class ChatService:
 
         return conv
 
+    async def attach_uploaded_document(
+        self,
+        chatbot_id: str,
+        session_id: str,
+        filename: str,
+        text: str,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> Conversation:
+        """Guarda el texto (ya extraído y acotado por el router) de un PDF subido por el
+        usuario, asociado a ESA conversación puntual. No se indexa en la base de conocimiento
+        del bot: una subida nueva reemplaza a la anterior dentro de la misma conversación."""
+        conv = await self.get_or_create_conversation(chatbot_id, session_id, ip_address, user_agent)
+        conv.uploaded_doc_filename = filename[:255]
+        conv.uploaded_doc_text = text
+        await self.db.commit()
+        return conv
+
     async def get_history(self, conversation_id: str, max_messages: int = 10) -> list[ChatMessage]:
         """Obtiene historial reciente para el contexto del LLM."""
         result = await self.db.execute(
@@ -154,16 +172,25 @@ class ChatService:
             threshold=chatbot.similarity_threshold,
         )
 
-        # 4. Construir mensajes para el LLM
+        # 4. Construir mensajes para el LLM. Si el usuario subió un PDF en esta conversación
+        # (chatbot.allow_user_uploads), su texto entra como contexto adicional, junto con lo
+        # que haya encontrado el RAG — no reemplaza la base de conocimiento del bot, se suma.
         personality = chatbot.system_prompt or "Sé amable, preciso y profesional."
         bot_name = chatbot.bot_name
 
+        context_parts = []
+        if conv.uploaded_doc_text:
+            context_parts.append(
+                f"[Documento subido por el usuario: {conv.uploaded_doc_filename}]\n{conv.uploaded_doc_text}"
+            )
         if rag_chunks:
-            context = self.rag.build_context(rag_chunks, settings.MAX_CONTEXT_TOKENS)
+            context_parts.append(self.rag.build_context(rag_chunks, settings.MAX_CONTEXT_TOKENS))
+
+        if context_parts:
             system_content = RAG_SYSTEM_TEMPLATE.format(
                 bot_name=bot_name,
                 personality=personality,
-                context=context,
+                context="\n\n---\n\n".join(context_parts),
             )
         else:
             system_content = NO_CONTEXT_SYSTEM_TEMPLATE.format(
@@ -262,7 +289,7 @@ Solo JSON, sin markdown ni explicaciones extra."""
             "tokens_used": ai_response.total_tokens,
             "latency_ms": total_ms,
             "model": f"{chatbot.ai_provider.value}/{chatbot.ai_model}",
-            "context_used": len(rag_chunks) > 0,
+            "context_used": bool(rag_chunks) or bool(conv.uploaded_doc_text),
             "suggest_contact": suggest_contact,
         }
 

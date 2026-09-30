@@ -2,6 +2,7 @@
 app/api/routers.py — Todos los endpoints FastAPI
 """
 import os
+import tempfile
 import re
 import json
 import html
@@ -12,7 +13,7 @@ import hashlib
 import aiofiles
 from datetime import datetime, timezone
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from sqlalchemy import select, func, update, delete, text, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,7 +36,7 @@ from app.core.net import get_client_ip
 from app.core.crypto import encrypt_secret, decrypt_secret, scrub_secrets
 from app.services.bot_keys import BotUnavailable, MSG_UNAVAILABLE, month_usage, current_month
 from app.services.chat_service import ChatService
-from app.services.rag_service import RAGService
+from app.services.rag_service import RAGService, DocumentExtractor
 
 logger = structlog.get_logger()
 
@@ -84,6 +85,7 @@ class ChatbotCreate(BaseModel):
     suggested_questions: Optional[list[str]] = None  # hasta 3, se muestran como botones al inicio del chat
     contact_email: Optional[str] = None  # contacto para intervención humana
     contact_whatsapp: Optional[str] = None  # ídem, con código de país (se guardan solo dígitos)
+    allow_user_uploads: Optional[bool] = None  # permite subir un PDF en el chat para analizarlo (solo admin/owner)
 
     @field_validator("suggested_questions")
     @classmethod
@@ -141,6 +143,7 @@ class ChatbotUpdate(BaseModel):
     suggested_questions: Optional[list[str]] = None  # hasta 3, [] o null = sin sugerencias
     contact_email: Optional[str] = None
     contact_whatsapp: Optional[str] = None
+    allow_user_uploads: Optional[bool] = None
 
     @field_validator("suggested_questions")
     @classmethod
@@ -380,6 +383,7 @@ async def get_chatbot(bot_id: str, payload: dict = Depends(get_current_user_payl
         "suggested_questions": bot.suggested_questions or [],
         "contact_email": bot.contact_email or "",
         "contact_whatsapp": bot.contact_whatsapp or "",
+        "allow_user_uploads": bot.allow_user_uploads,
         "total_conversations": bot.total_conversations,
         "total_messages": bot.total_messages,
         "total_tokens_used": bot.total_tokens_used,
@@ -726,6 +730,8 @@ async def get_widget_script(bot_id: str, request: Request, key: Optional[str] = 
         "suggestedQuestions": bot.suggested_questions or [],  # hasta 3 botones de pregunta al inicio del chat
         "contactEmail": bot.contact_email or None,
         "contactWhatsapp": bot.contact_whatsapp or None,  # solo dígitos con código de país
+        "allowUserUploads": bot.allow_user_uploads,  # permite subir un PDF en el chat
+        "chatUploadMaxMb": settings.CHAT_UPLOAD_MAX_SIZE_MB if bot.allow_user_uploads else None,
         "welcomeMessage": bot.welcome_message,
         "primaryColor": widget_config.get("primary_color", "#6c63ff"),
         "secondaryColor": widget_config.get("secondary_color", "#a78bfa"),
@@ -1116,6 +1122,13 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
            flex-shrink: 0; }}
   #send:hover {{ filter: brightness(1.1); transform: scale(1.05); }}
   #send svg {{ width: 16px; height: 16px; }}
+  #attach-btn {{
+    width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0;
+    background: #f0f0f5; border: none; cursor: pointer; font-size: 17px;
+    display: flex; align-items: center; justify-content: center; transition: background 0.15s;
+  }}
+  #attach-btn:hover {{ background: #e5e5ef; }}
+  #attach-btn:disabled {{ opacity: 0.5; cursor: wait; }}
   /* El logo de Modernización es blanco: va sobre el mismo degradé del header */
   .footer-logo {{ background: linear-gradient(135deg, var(--color), var(--color2)); padding: 10px 16px;
                   display: flex; justify-content: center; align-items: center; flex-shrink: 0; }}
@@ -1167,6 +1180,7 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
 {help_menu_html}
 <div class="messages" id="msgs"></div>
 <div class="input-area">
+  {attach_button_html}
   <textarea id="inp" placeholder="Escribe tu mensaje..." rows="1" maxlength="2000"></textarea>
   <button id="send">
     <svg fill="none" stroke="#fff" stroke-width="2" viewBox="0 0 24 24">
@@ -1183,6 +1197,7 @@ const API_KEY = {api_key_js};
 const CONTACT_EMAIL = {contact_email_js};
 const CONTACT_WHATSAPP = {contact_whatsapp_js};
 const BOT_NAME_JS = {bot_name_js};
+const CHAT_UPLOAD_MAX_MB = {chat_upload_max_mb_js};
 const SESSION = "pg_" + Math.random().toString(36).slice(2) + Date.now().toString(36);
 let busy = false;
 
@@ -1272,6 +1287,47 @@ async function send(presetText) {{
   }} finally {{ busy = false; }}
 }}
 
+async function uploadPdf(file) {{
+  if (busy) return;
+  if (file.type && file.type !== "application/pdf" && !/\.pdf$/i.test(file.name)) {{
+    addMsg("bot", "Solo se aceptan archivos PDF.");
+    return;
+  }}
+  if (file.size > CHAT_UPLOAD_MAX_MB * 1024 * 1024) {{
+    addMsg("bot", `El archivo supera el límite de ${{CHAT_UPLOAD_MAX_MB}}MB.`);
+    return;
+  }}
+
+  addMsg("user", "📎 " + file.name);
+  const m = document.getElementById("msgs");
+  const t = document.createElement("div");
+  t.id = "typing"; t.className = "msg bot";
+  t.innerHTML = `<div class="msg-av">{avatar_js}</div><div class="typing"><span></span><span></span><span></span></div>`;
+  m.appendChild(t); m.scrollTop = m.scrollHeight;
+  busy = true;
+  const attachBtn = document.getElementById("attach-btn");
+  if (attachBtn) attachBtn.disabled = true;
+
+  try {{
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("session_id", SESSION);
+    const headers = {{}};
+    if (API_KEY) headers["X-API-Key"] = API_KEY;
+    const res = await fetch(`${{API}}/api/v1/chat/${{BOT_ID}}/upload`, {{ method: "POST", headers, body: formData }});
+    const data = await res.json();
+    document.getElementById("typing")?.remove();
+    if (!res.ok) throw new Error(data.detail || "Error al procesar el documento");
+    addMsg("bot", data.message);
+  }} catch(e) {{
+    document.getElementById("typing")?.remove();
+    addMsg("bot", "No pude procesar el documento. " + e.message);
+  }} finally {{
+    busy = false;
+    if (attachBtn) attachBtn.disabled = false;
+  }}
+}}
+
 document.getElementById("send").addEventListener("click", () => send());
 document.getElementById("inp").addEventListener("keydown", e => {{
   if (e.key === "Enter" && !e.shiftKey) {{ e.preventDefault(); send(); }}
@@ -1280,6 +1336,16 @@ document.getElementById("inp").addEventListener("input", function() {{
   this.style.height = "auto";
   this.style.height = Math.min(this.scrollHeight, 110) + "px";
 }});
+
+const attachBtnEl = document.getElementById("attach-btn");
+if (attachBtnEl) {{
+  const fileInput = document.getElementById("file-input");
+  attachBtnEl.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {{
+    if (fileInput.files[0]) uploadPdf(fileInput.files[0]);
+    fileInput.value = "";
+  }});
+}}
 
 const helpBtn = document.getElementById("help-btn");
 if (helpBtn) {{
@@ -1369,6 +1435,12 @@ async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db
 
     help_button_html, help_menu_html = _human_contact_menu(bot, "help")
 
+    attach_button_html = (
+        '<input type="file" id="file-input" accept="application/pdf" style="display:none">'
+        '<button type="button" id="attach-btn" aria-label="Adjuntar PDF" title="Adjuntar PDF">📎</button>'
+        if bot.allow_user_uploads else ""
+    )
+
     footer_logo_url = _footer_logo_url()
     footer_logo_html = (
         f'<div class="footer-logo"><img src="{html.escape(api_url.rstrip("/") + footer_logo_url)}" alt="Modernización"></div>'
@@ -1406,6 +1478,8 @@ async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db
         contact_email_js=js_str(bot.contact_email or ""),
         contact_whatsapp_js=js_str(bot.contact_whatsapp or ""),
         bot_name_js=js_str(bot.bot_name or bot.name),
+        attach_button_html=attach_button_html,
+        chat_upload_max_mb_js=str(settings.CHAT_UPLOAD_MAX_SIZE_MB),
     )
     return HTMLResponse(content=page_html)
 
@@ -1469,6 +1543,85 @@ async def chat_api(
         logger.error("chat_error", error=scrub_secrets(str(e)))
         asyncio.create_task(notify_bot_failure(bot_id, e))
         raise HTTPException(500, "Error interno del servidor")
+
+
+@chat_router.post("/{bot_id}/upload")
+async def chat_upload_pdf(
+    bot_id: str,
+    request: Request,
+    session_id: str = Form(...),
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sube un PDF desde el chat público para analizarlo en ESA conversación puntual (no se
+    indexa en la base de conocimiento del bot; una subida nueva reemplaza a la anterior).
+    Requiere que el bot tenga allow_user_uploads activado desde el admin."""
+    bot = await db.get(Chatbot, bot_id)
+    if not bot or not bot.is_active or not bot.is_public:
+        raise HTTPException(404, "Chatbot no disponible")
+    if not bot.allow_user_uploads:
+        raise HTTPException(403, "Este bot no tiene habilitada la subida de documentos")
+    await _authorize_public_chat(bot_id, request, db)
+
+    content = await file.read()
+    if len(content) > settings.chat_upload_max_size_bytes:
+        raise HTTPException(413, f"El archivo supera el límite de {settings.CHAT_UPLOAD_MAX_SIZE_MB}MB")
+    if not content:
+        raise HTTPException(400, "El archivo está vacío")
+    # Se valida la firma real del archivo (no el content-type que declara el navegador, que
+    # puede venir mal seteado según el SO/navegador) — mismo criterio que _sniff_image_ext.
+    if not content.startswith(b"%PDF-"):
+        raise HTTPException(400, "Solo se aceptan archivos PDF")
+
+    # Se extrae en un temporal que se borra apenas termina — no se guarda en disco ni se indexa,
+    # solo su texto (acotado) queda en la conversación (Conversation.uploaded_doc_text).
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        pages = await DocumentExtractor.extract(tmp_path, "application/pdf")
+    except Exception as e:
+        logger.error("chat_upload_extract_error", bot_id=bot_id, error=scrub_secrets(str(e)))
+        raise HTTPException(400, "No se pudo leer el PDF (¿está dañado o protegido?)")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    if not pages:
+        raise HTTPException(400, "No se pudo extraer texto del PDF (puede ser una imagen escaneada sin OCR disponible)")
+
+    truncated_pages = pages[: settings.CHAT_UPLOAD_MAX_PAGES]
+    full_text = "\n\n".join(f"[Página {p['page']}]\n{p['text']}" for p in truncated_pages)
+    char_truncated = len(full_text) > settings.CHAT_UPLOAD_MAX_CHARS
+    text = full_text[: settings.CHAT_UPLOAD_MAX_CHARS]
+    page_truncated = len(pages) > len(truncated_pages)
+
+    safe_name = _safe_filename(file.filename or "documento.pdf")
+    svc = ChatService(db)
+    await svc.attach_uploaded_document(
+        chatbot_id=bot_id,
+        session_id=session_id,
+        filename=safe_name,
+        text=text,
+        ip_address=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+
+    notice = ""
+    if page_truncated:
+        notice = f" (se analizaron las primeras {len(truncated_pages)} de {len(pages)} páginas)"
+    elif char_truncated:
+        notice = " (documento largo: se analizó un extracto)"
+    message = f"📄 Documento «{safe_name}» cargado{notice}. Preguntame lo que quieras sobre su contenido."
+
+    logger.info("chat_upload_ok", bot_id=bot_id, filename=safe_name, pages=len(pages), chars=len(text))
+    return {
+        "filename": safe_name,
+        "pages": len(pages),
+        "truncated": page_truncated or char_truncated,
+        "message": message,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════

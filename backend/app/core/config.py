@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     MAX_FILE_SIZE_MB: int = 50
 
+    # PDF que sube el usuario final en el chat (ruta pública, sin login): topes más chicos que
+    # la subida del admin, para acotar abuso y el costo de procesarlo en cada mensaje.
+    CHAT_UPLOAD_MAX_SIZE_MB: int = 8
+    CHAT_UPLOAD_MAX_PAGES: int = 30
+    CHAT_UPLOAD_MAX_CHARS: int = 16000  # ~4000 tokens, mismo orden que MAX_CONTEXT_TOKENS
+
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_WINDOW_SECONDS: int = 60
 
@@ -96,6 +102,10 @@ class Settings(BaseSettings):
     @property
     def max_file_size_bytes(self) -> int:
         return self.MAX_FILE_SIZE_MB * 1024 * 1024
+
+    @property
+    def chat_upload_max_size_bytes(self) -> int:
+        return self.CHAT_UPLOAD_MAX_SIZE_MB * 1024 * 1024
 
 
 @lru_cache()

@@ -109,6 +109,11 @@ class Chatbot(Base):
     contact_email: Mapped[Optional[str]] = mapped_column(String(255))
     contact_whatsapp: Mapped[Optional[str]] = mapped_column(String(20))
 
+    # Permite que el usuario final suba un PDF en el chat para preguntar sobre su contenido.
+    # El texto extraído se guarda por conversación (Conversation.uploaded_doc_*), NO se indexa
+    # en la base de conocimiento del bot ni queda disponible para otras conversaciones.
+    allow_user_uploads: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # RAG Config
     top_k: Mapped[int] = mapped_column(Integer, default=5)
     similarity_threshold: Mapped[float] = mapped_column(Float, default=0.7)
@@ -209,6 +214,11 @@ class Conversation(Base):
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_activity: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    # PDF subido por el usuario en esta conversación puntual (texto ya extraído y acotado).
+    # Se usa como contexto extra en el chat; una subida nueva reemplaza a la anterior.
+    uploaded_doc_filename: Mapped[Optional[str]] = mapped_column(String(255))
+    uploaded_doc_text: Mapped[Optional[str]] = mapped_column(Text)
 
     chatbot: Mapped["Chatbot"] = relationship("Chatbot", back_populates="conversations")
     messages: Mapped[List["Message"]] = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")

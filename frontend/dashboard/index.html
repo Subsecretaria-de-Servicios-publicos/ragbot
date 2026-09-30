@@ -672,6 +672,11 @@
               <span>Bot público (accesible vía widget y chat embebido)</span>
             </label>
             <div class="form-hint">Si está desmarcado, el widget y la página de chat de este bot no responden a nadie, aunque tengan el link o el bot_id.</div>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:14px">
+              <input type="checkbox" id="cfg-allow-uploads">
+              <span>Permitir subir un PDF en el chat para analizarlo</span>
+            </label>
+            <div class="form-hint">El usuario puede adjuntar un PDF (hasta 8MB) y preguntar sobre su contenido. Se analiza solo para esa conversación puntual: no se guarda en la base de conocimiento del bot ni queda disponible para otros usuarios.</div>
           </div>
         </div>
         </div><!-- /cfg-admin-panels -->
@@ -1472,6 +1477,7 @@ async function loadBotConfig(botId) {
     document.getElementById('cfg-top-k').value = bot.top_k || 5;
     document.getElementById('cfg-threshold').value = bot.similarity_threshold || 0.7;
     document.getElementById('cfg-is-public').checked = !!bot.is_public;
+    document.getElementById('cfg-allow-uploads').checked = !!bot.allow_user_uploads;
     renderAvatarPreview(bot.bot_avatar_url);
     renderOrgLogoPreview(bot.org_logo_url);
     renderKeyAndUsage(bot);
@@ -1687,6 +1693,7 @@ async function saveBotConfig() {
     top_k: parseInt(document.getElementById('cfg-top-k').value),
     similarity_threshold: parseFloat(document.getElementById('cfg-threshold').value),
     is_public: document.getElementById('cfg-is-public').checked,
+    allow_user_uploads: document.getElementById('cfg-allow-uploads').checked,
     monthly_token_limit: parseInt(document.getElementById('cfg-token-limit').value) || 0,  // 0 = sin límite
   });
   try {
