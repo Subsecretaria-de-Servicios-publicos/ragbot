@@ -82,6 +82,8 @@ class ChatbotCreate(BaseModel):
     similarity_threshold: float = 0.7
     is_public: bool = False
     suggested_questions: Optional[list[str]] = None  # hasta 3, se muestran como botones al inicio del chat
+    contact_email: Optional[str] = None  # contacto para intervención humana
+    contact_whatsapp: Optional[str] = None  # ídem, con código de país (se guardan solo dígitos)
 
     @field_validator("suggested_questions")
     @classmethod
@@ -94,6 +96,31 @@ class ChatbotCreate(BaseModel):
         if any(len(q) > 150 for q in v):
             raise ValueError(f"Cada pregunta disparadora puede tener hasta 150 caracteres")
         return v  # [] explícito borra (no None: exclude_none del PATCH lo descartaría)
+
+    @field_validator("contact_email")
+    @classmethod
+    def _check_contact_email(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return ""  # "" explícito borra (no None: exclude_none del PATCH lo descartaría)
+        import re as _re
+        if not _re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v):
+            raise ValueError("Email de contacto inválido")
+        return v
+
+    @field_validator("contact_whatsapp")
+    @classmethod
+    def _check_contact_whatsapp(cls, v):
+        if v is None:
+            return v
+        digits = "".join(c for c in v if c.isdigit())
+        if not digits:
+            return ""  # "" explícito borra (no None: exclude_none del PATCH lo descartaría)
+        if not (8 <= len(digits) <= 15):
+            raise ValueError("Número de WhatsApp inválido (incluí código de país, ej: 5493871234567)")
+        return digits
 
 class ChatbotUpdate(BaseModel):
     name: Optional[str] = None
@@ -112,6 +139,8 @@ class ChatbotUpdate(BaseModel):
     is_public: Optional[bool] = None
     monthly_token_limit: Optional[int] = None  # solo admin; 0 = sin límite
     suggested_questions: Optional[list[str]] = None  # hasta 3, [] o null = sin sugerencias
+    contact_email: Optional[str] = None
+    contact_whatsapp: Optional[str] = None
 
     @field_validator("suggested_questions")
     @classmethod
@@ -124,6 +153,31 @@ class ChatbotUpdate(BaseModel):
         if any(len(q) > 150 for q in v):
             raise ValueError(f"Cada pregunta disparadora puede tener hasta 150 caracteres")
         return v  # [] explícito borra (no None: exclude_none del PATCH lo descartaría)
+
+    @field_validator("contact_email")
+    @classmethod
+    def _check_contact_email(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return ""  # "" explícito borra (no None: exclude_none del PATCH lo descartaría)
+        import re as _re
+        if not _re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v):
+            raise ValueError("Email de contacto inválido")
+        return v
+
+    @field_validator("contact_whatsapp")
+    @classmethod
+    def _check_contact_whatsapp(cls, v):
+        if v is None:
+            return v
+        digits = "".join(c for c in v if c.isdigit())
+        if not digits:
+            return ""  # "" explícito borra (no None: exclude_none del PATCH lo descartaría)
+        if not (8 <= len(digits) <= 15):
+            raise ValueError("Número de WhatsApp inválido (incluí código de país, ej: 5493871234567)")
+        return digits
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -253,7 +307,7 @@ def _make_slug(name: str) -> str:
 # Campos que un usuario asignado (no dueño, no admin/superadmin) puede editar de un bot.
 # El resto (proveedor/modelo de IA, temperatura, is_public, is_active, etc.) queda reservado
 # a admin/superadmin — separa "qué bot puede tocar" (asignación) de "qué le permite su rol".
-ASSIGNEE_EDITABLE_FIELDS = {"description", "system_prompt", "welcome_message", "bot_name", "widget_config", "suggested_questions"}
+ASSIGNEE_EDITABLE_FIELDS = {"description", "system_prompt", "welcome_message", "bot_name", "widget_config", "suggested_questions", "contact_email", "contact_whatsapp"}
 
 
 async def _is_assigned(bot_id: str, user_id: str, db: AsyncSession) -> bool:
@@ -324,6 +378,8 @@ async def get_chatbot(bot_id: str, payload: dict = Depends(get_current_user_payl
         "widget_config": bot.widget_config, "top_k": bot.top_k,
         "similarity_threshold": bot.similarity_threshold,
         "suggested_questions": bot.suggested_questions or [],
+        "contact_email": bot.contact_email or "",
+        "contact_whatsapp": bot.contact_whatsapp or "",
         "total_conversations": bot.total_conversations,
         "total_messages": bot.total_messages,
         "total_tokens_used": bot.total_tokens_used,
@@ -668,6 +724,8 @@ async def get_widget_script(bot_id: str, request: Request, key: Optional[str] = 
         "footerLogoUrl": _footer_logo_url(),  # logo de Modernización (pie del chat), idem
         "orgLogoUrl": bot.org_logo_url,  # logo del organismo/secretaría dueña de este bot
         "suggestedQuestions": bot.suggested_questions or [],  # hasta 3 botones de pregunta al inicio del chat
+        "contactEmail": bot.contact_email or None,
+        "contactWhatsapp": bot.contact_whatsapp or None,  # solo dígitos con código de país
         "welcomeMessage": bot.welcome_message,
         "primaryColor": widget_config.get("primary_color", "#6c63ff"),
         "secondaryColor": widget_config.get("secondary_color", "#a78bfa"),
@@ -1067,6 +1125,23 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
                      color: var(--color); border-radius: 14px; padding: 8px 14px; font-size: 13px;
                      text-align: left; cursor: pointer; transition: background 0.15s, color 0.15s; }}
   .suggestion-btn:hover {{ background: var(--color); color: #fff; }}
+  .header {{ position: relative; }}
+  #help-btn {{ background: rgba(255,255,255,0.18); border: none; cursor: pointer; color: #fff;
+               width: 32px; height: 32px; border-radius: 50%; font-size: 15px; flex-shrink: 0;
+               display: flex; align-items: center; justify-content: center; transition: background 0.15s; }}
+  #help-btn:hover {{ background: rgba(255,255,255,0.3); }}
+  #help-menu {{
+    display: none; position: absolute; top: 58px; right: 16px; background: #fff;
+    border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.18); overflow: hidden;
+    min-width: 220px; z-index: 5;
+  }}
+  #help-menu.open {{ display: block; }}
+  #help-menu a {{
+    display: flex; align-items: center; gap: 10px; padding: 12px 14px; font-size: 13px;
+    color: #333; text-decoration: none; border-bottom: 1px solid #f0f0f5;
+  }}
+  #help-menu a:last-child {{ border-bottom: none; }}
+  #help-menu a:hover {{ background: #f8f8fc; }}
 </style>
 </head>
 <body>
@@ -1078,7 +1153,9 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
     <h1>{bot_name}</h1>
     <p>● En línea</p>
   </div>
+  {help_button_html}
 </div>
+{help_menu_html}
 <div class="messages" id="msgs"></div>
 <div class="input-area">
   <textarea id="inp" placeholder="Escribe tu mensaje..." rows="1" maxlength="2000"></textarea>
@@ -1175,6 +1252,13 @@ document.getElementById("inp").addEventListener("input", function() {{
   this.style.height = "auto";
   this.style.height = Math.min(this.scrollHeight, 110) + "px";
 }});
+
+const helpBtn = document.getElementById("help-btn");
+if (helpBtn) {{
+  const menu = document.getElementById("help-menu");
+  helpBtn.addEventListener("click", e => {{ e.stopPropagation(); menu.classList.toggle("open"); }});
+  document.addEventListener("click", () => menu.classList.remove("open"));
+}}
 </script>
 </body>
 </html>"""
@@ -1238,6 +1322,25 @@ async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db
         f'<img class="gov-logo" src="{html.escape(api_url.rstrip("/") + gov_logo_url)}" alt="Gobierno de Salta">'
         if gov_logo_url else ""
     )
+    def _human_contact_menu(bot, id_prefix: str) -> tuple[str, str]:
+        """Botón + menú desplegable de intervención humana. HTML vacío si el bot no tiene
+        contacto configurado. Reutilizado por la página de chat completa; el widget (JS aparte)
+        arma el suyo con la misma info vía config."""
+        items = []
+        if bot.contact_email:
+            mailto = f"mailto:{html.escape(bot.contact_email)}?subject={html.escape(f'Consulta sobre {bot.bot_name or bot.name}')}"
+            items.append(f'<a href="{mailto}">✉️ Escribir por email</a>')
+        if bot.contact_whatsapp:
+            wa = f"https://wa.me/{html.escape(bot.contact_whatsapp)}"
+            items.append(f'<a href="{wa}" target="_blank" rel="noopener">🟢 Escribir por WhatsApp</a>')
+        if not items:
+            return "", ""
+        button = f'<button type="button" id="{id_prefix}-btn" aria-label="Hablar con una persona" title="Hablar con una persona">🆘</button>'
+        menu = f'<div id="{id_prefix}-menu">' + "".join(items) + "</div>"
+        return button, menu
+
+    help_button_html, help_menu_html = _human_contact_menu(bot, "help")
+
     footer_logo_url = _footer_logo_url()
     footer_logo_html = (
         f'<div class="footer-logo"><img src="{html.escape(api_url.rstrip("/") + footer_logo_url)}" alt="Modernización"></div>'
@@ -1270,6 +1373,8 @@ async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db
         api_url_js=js_str(api_url),
         api_key_js=js_str(key) if key else "null",
         suggested_questions_js=json.dumps(bot.suggested_questions or []).replace("</", "<\/"),
+        help_button_html=help_button_html,
+        help_menu_html=help_menu_html,
     )
     return HTMLResponse(content=page_html)
 

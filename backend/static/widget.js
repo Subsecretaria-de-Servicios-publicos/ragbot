@@ -48,6 +48,7 @@
     /* Chat Window */
     #ragbot-window {
       position: fixed;
+      /* ancla para #rb-help-menu (position: absolute) */
       width: 380px;
       height: 560px;
       background: #ffffff;
@@ -93,6 +94,24 @@
       transition: background 0.15s;
     }
     #rb-close-btn:hover { background: rgba(255,255,255,0.25); }
+    #rb-help-btn {
+      background: rgba(255,255,255,0.18); border: none; cursor: pointer; color: #fff;
+      width: 28px; height: 28px; border-radius: 50%; font-size: 14px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center; transition: background 0.15s;
+    }
+    #rb-help-btn:hover { background: rgba(255,255,255,0.3); }
+    #rb-help-menu {
+      display: none; position: absolute; top: 66px; right: 12px; background: #fff;
+      border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.18); overflow: hidden;
+      min-width: 210px; z-index: 5;
+    }
+    #rb-help-menu.open { display: block; }
+    #rb-help-menu a {
+      display: flex; align-items: center; gap: 10px; padding: 11px 14px; font-size: 12.5px;
+      color: #333; text-decoration: none; border-bottom: 1px solid #f0f0f5;
+    }
+    #rb-help-menu a:last-child { border-bottom: none; }
+    #rb-help-menu a:hover { background: #f8f8fc; }
 
     /* Messages */
     #rb-messages {
@@ -216,6 +235,8 @@
         botAvatar: config.botAvatar || '🤖',
         govLogoUrl: config.govLogoUrl || null,
         footerLogoUrl: config.footerLogoUrl || null,
+        contactEmail: config.contactEmail || null,
+        contactWhatsapp: config.contactWhatsapp || null,  // solo dígitos con código de país
         orgLogoUrl: config.orgLogoUrl || null,
         suggestedQuestions: Array.isArray(config.suggestedQuestions) ? config.suggestedQuestions.slice(0,3) : [],
         showBranding: config.showBranding !== false,
@@ -283,8 +304,10 @@
               <div id="rb-bot-name">${this._escapeHtml(this.config.botName)}</div>
               <div id="rb-status"><span class="rb-dot"></span> En línea</div>
             </div>
+            ${this._helpButtonHtml()}
             <button id="rb-close-btn" aria-label="Cerrar">✕</button>
           </div>
+          ${this._helpMenuHtml()}
 
           <div id="rb-messages" role="log" aria-live="polite"></div>
 
@@ -341,6 +364,12 @@
     _bindEvents() {
       this.elements.trigger.addEventListener('click', () => this.toggle());
       document.getElementById('rb-close-btn').addEventListener('click', () => this.close());
+      const helpBtn = document.getElementById('rb-help-btn');
+      if (helpBtn) {
+        const menu = document.getElementById('rb-help-menu');
+        helpBtn.addEventListener('click', e => { e.stopPropagation(); menu.classList.toggle('open'); });
+        document.addEventListener('click', () => menu.classList.remove('open'));
+      }
 
       this.elements.send.addEventListener('click', () => this._sendMessage());
       this.elements.input.addEventListener('keydown', e => {
@@ -454,6 +483,24 @@
       const url = this.config.govLogoUrl;
       const src = url.startsWith('/') ? this.config.apiUrl + url : url;
       return `<img id="rb-gov-logo" src="${this._escapeHtml(src)}" alt="Gobierno de Salta">`;
+    }
+
+    _helpButtonHtml() {
+      if (!this.config.contactEmail && !this.config.contactWhatsapp) return '';
+      return '<button type="button" id="rb-help-btn" aria-label="Hablar con una persona" title="Hablar con una persona">🆘</button>';
+    }
+
+    _helpMenuHtml() {
+      if (!this.config.contactEmail && !this.config.contactWhatsapp) return '';
+      const items = [];
+      if (this.config.contactEmail) {
+        const subject = encodeURIComponent(`Consulta sobre ${this.config.botName}`);
+        items.push(`<a href="mailto:${this._escapeHtml(this.config.contactEmail)}?subject=${subject}">✉️ Escribir por email</a>`);
+      }
+      if (this.config.contactWhatsapp) {
+        items.push(`<a href="https://wa.me/${this._escapeHtml(this.config.contactWhatsapp)}" target="_blank" rel="noopener">🟢 Escribir por WhatsApp</a>`);
+      }
+      return `<div id="rb-help-menu">${items.join('')}</div>`;
     }
 
     // Pie del chat: logo de Modernización si está cargado; si no, el "Powered by" (si showBranding)

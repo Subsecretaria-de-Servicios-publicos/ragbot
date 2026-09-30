@@ -568,6 +568,12 @@
               <div class="form-hint">Define la personalidad, tono y restricciones del bot</div>
             </div>
             <div class="form-group">
+              <label class="form-label">Contacto para intervención humana</label>
+              <input class="form-input" id="cfg-contact-email" type="email" placeholder="Email (ej: ayuda@salta.gob.ar)" style="margin-bottom:8px">
+              <input class="form-input" id="cfg-contact-whatsapp" placeholder="WhatsApp con código de país (ej: 5493871234567)">
+              <div class="form-hint">Si cargás al menos uno, aparece un botón 🆘 en el chat para que el usuario pueda escribirle a una persona. Dejalos vacíos para no mostrarlo.</div>
+            </div>
+            <div class="form-group">
               <label class="form-label">Preguntas disparadoras (hasta 3)</label>
               <input class="form-input" id="cfg-suggestion-1" placeholder="Ej: ¿Cómo era Güemes?" maxlength="150" style="margin-bottom:8px">
               <input class="form-input" id="cfg-suggestion-2" placeholder="Ej: ¿Cuándo nació?" maxlength="150" style="margin-bottom:8px">
@@ -1453,6 +1459,8 @@ async function loadBotConfig(botId) {
     document.getElementById('cfg-description').value = bot.description || '';
     document.getElementById('cfg-welcome').value = bot.welcome_message || '';
     document.getElementById('cfg-system-prompt').value = bot.system_prompt || '';
+    document.getElementById('cfg-contact-email').value = bot.contact_email || '';
+    document.getElementById('cfg-contact-whatsapp').value = bot.contact_whatsapp || '';
     const suggestions = bot.suggested_questions || [];
     for (let i = 0; i < 3; i++) document.getElementById(`cfg-suggestion-${i+1}`).value = suggestions[i] || '';
     document.getElementById('cfg-provider').value = bot.ai_provider || 'openai';
@@ -1667,6 +1675,8 @@ async function saveBotConfig() {
     description: document.getElementById('cfg-description').value,
     welcome_message: document.getElementById('cfg-welcome').value,
     system_prompt: document.getElementById('cfg-system-prompt').value,
+    contact_email: document.getElementById('cfg-contact-email').value.trim(),
+    contact_whatsapp: document.getElementById('cfg-contact-whatsapp').value.trim(),
     suggested_questions: [1,2,3].map(i => document.getElementById(`cfg-suggestion-${i}`).value.trim()).filter(Boolean),
   };
   if (canManageBotSettings()) Object.assign(data, {

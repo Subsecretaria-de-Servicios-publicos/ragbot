@@ -103,6 +103,12 @@ class Chatbot(Base):
     # guiar al usuario sobre qué puede preguntarle al bot. Ej: ["¿Quién fue Güemes?", ...]
     suggested_questions: Mapped[Optional[list]] = mapped_column(JSONB)
 
+    # Contacto para intervención humana (opcional, ambos): se muestran como botón en el chat
+    # para que el usuario escale la consulta. contact_whatsapp se guarda solo dígitos (con
+    # código de país, sin '+'), listo para armar el link wa.me.
+    contact_email: Mapped[Optional[str]] = mapped_column(String(255))
+    contact_whatsapp: Mapped[Optional[str]] = mapped_column(String(20))
+
     # RAG Config
     top_k: Mapped[int] = mapped_column(Integer, default=5)
     similarity_threshold: Mapped[float] = mapped_column(Float, default=0.7)
