@@ -20,7 +20,7 @@ from app.core.net import get_client_ip
 from app.api.routers import (
     auth_router, users_router, chatbots_router, api_keys_router,
     ai_providers_router, branding_router, documents_router, chat_router, analytics_router,
-    contact_requests_router, admin_contact_router,
+    contact_requests_router, admin_contact_router, bot_files_router,
 )
 
 logger = structlog.get_logger()
@@ -124,6 +124,7 @@ app.include_router(api_keys_router, prefix=API_PREFIX)
 app.include_router(ai_providers_router, prefix=API_PREFIX)
 app.include_router(branding_router, prefix=API_PREFIX)
 app.include_router(documents_router, prefix=API_PREFIX)
+app.include_router(bot_files_router, prefix=API_PREFIX)
 app.include_router(chat_router, prefix=API_PREFIX)
 app.include_router(contact_requests_router, prefix=API_PREFIX)
 app.include_router(admin_contact_router, prefix=API_PREFIX)

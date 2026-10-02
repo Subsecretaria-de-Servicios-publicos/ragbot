@@ -2,6 +2,7 @@
 app/api/routers.py — Todos los endpoints FastAPI
 """
 import os
+import shutil
 import tempfile
 import re
 import json
@@ -26,7 +27,7 @@ from app.services.alert_service import notify_bot_failure, notify_bot_event, sen
 from app.models.models import (
     User, Chatbot, Document, DocumentChunk, Conversation, Message,
     UserRole, DocumentStatus, APIKey, AIProviderConfig, ChatbotAssignment,
-    HumanContactRequest, ContactRequestStatus,
+    HumanContactRequest, ContactRequestStatus, BotFile,
 )
 from app.core.security import (
     hash_password, verify_password,
@@ -537,6 +538,7 @@ async def delete_chatbot(bot_id: str, payload: dict = Depends(require_role("admi
     await db.commit()
     _delete_bot_image(bot_id, AVATARS_DIR)
     _delete_bot_image(bot_id, ORG_LOGOS_DIR)
+    shutil.rmtree(os.path.join(BOT_FILES_DIR, bot_id), ignore_errors=True)
     return {"ok": True}
 
 
@@ -601,6 +603,8 @@ AVATAR_EXT_BY_MAGIC = {
 MAX_AVATAR_SIZE_BYTES = 2 * 1024 * 1024  # 2MB
 AVATARS_DIR = os.path.join("static", "avatars")
 ORG_LOGOS_DIR = os.path.join("static", "org_logos")
+BOT_FILES_DIR = os.path.join("static", "bot_files")  # ruta en disco
+BOT_FILES_URL_PREFIX = "/static/bot_files"  # ruta pública (independiente de dónde se guarde en disco)
 
 
 IMAGE_EXTS = ("png", "jpg", "gif", "webp", "svg")
@@ -1117,6 +1121,92 @@ async def delete_document(bot_id: str, doc_id: str, payload: dict = Depends(requ
 
 
 # ═══════════════════════════════════════════════════════════════
+# BOT FILES — PDFs descargables (formularios, guías) que el bot ofrece por link. NO se
+# chunkean ni se embeben (a diferencia de Document/RAG): title/description son lo que el bot
+# lee para decidir cuál ofrecer cuando el usuario lo pide.
+# ═══════════════════════════════════════════════════════════════
+
+bot_files_router = APIRouter(prefix="/chatbots/{bot_id}/files", tags=["bot-files"])
+
+
+@bot_files_router.get("/")
+async def list_bot_files(bot_id: str, payload: dict = Depends(get_current_user_payload), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    result = await db.execute(select(BotFile).where(BotFile.chatbot_id == bot_id).order_by(BotFile.created_at.desc()))
+    return [{
+        "id": f.id, "title": f.title, "description": f.description,
+        "original_filename": f.original_filename, "file_size": f.file_size,
+        "url": f"{BOT_FILES_URL_PREFIX}/{bot_id}/{f.filename}",
+        "created_at": f.created_at.isoformat(),
+    } for f in result.scalars().all()]
+
+
+@bot_files_router.post("/", status_code=201)
+async def upload_bot_file(
+    bot_id: str,
+    title: str = Form(...),
+    description: str = Form(""),
+    file: UploadFile = File(...),
+    payload: dict = Depends(require_role("operator")),
+    db: AsyncSession = Depends(get_db),
+):
+    await _get_owned_chatbot(bot_id, payload, db)
+    title = title.strip()
+    if not title:
+        raise HTTPException(400, "El título es obligatorio")
+    if len(title) > 200:
+        raise HTTPException(400, "El título es demasiado largo (máx 200 caracteres)")
+    description = (description or "").strip()[:1000]
+
+    content = await file.read()
+    if len(content) > settings.max_file_size_bytes:
+        raise HTTPException(413, f"Archivo demasiado grande (máx {settings.MAX_FILE_SIZE_MB}MB)")
+    if not content:
+        raise HTTPException(400, "El archivo está vacío")
+    if not content.startswith(b"%PDF-"):
+        raise HTTPException(400, "Solo se aceptan archivos PDF")
+
+    bot_dir = os.path.join(BOT_FILES_DIR, bot_id)
+    os.makedirs(bot_dir, exist_ok=True)
+    safe_name = f"{uuid.uuid4()}.pdf"
+    async with aiofiles.open(os.path.join(bot_dir, safe_name), "wb") as f:
+        await f.write(content)
+
+    bf = BotFile(
+        chatbot_id=bot_id, title=title, description=description or None,
+        filename=safe_name, original_filename=_safe_filename(file.filename or "documento.pdf"),
+        file_size=len(content), created_by=payload["sub"],
+    )
+    db.add(bf)
+    await db.commit()
+    await db.refresh(bf)
+    logger.info("bot_file_uploaded", bot_id=bot_id, file_id=bf.id, title=title)
+    return {
+        "id": bf.id, "title": bf.title, "description": bf.description,
+        "original_filename": bf.original_filename, "file_size": bf.file_size,
+        "url": f"{BOT_FILES_URL_PREFIX}/{bot_id}/{bf.filename}",
+        "created_at": bf.created_at.isoformat(),
+    }
+
+
+@bot_files_router.delete("/{file_id}")
+async def delete_bot_file(bot_id: str, file_id: str, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    bf = await db.get(BotFile, file_id)
+    if not bf or bf.chatbot_id != bot_id:
+        raise HTTPException(404, "Archivo no encontrado")
+    path = os.path.join(BOT_FILES_DIR, bot_id, bf.filename)
+    if os.path.exists(path):
+        try:
+            os.remove(path)
+        except OSError as e:
+            logger.warning("bot_file_delete_error", path=path, error=str(e))
+    await db.delete(bf)
+    await db.commit()
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════
 # CHAT — GET sirve HTML, POST procesa mensaje
 # ═══════════════════════════════════════════════════════════════
 
@@ -1158,6 +1248,7 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
   .msg.bot .bubble {{ background: {bot_bubble_color}; border-bottom-left-radius: 4px; color: #1a1a2e;
                       box-shadow: 0 1px 4px rgba(0,0,0,0.07); }}
   .msg.user .bubble {{ background: var(--color); color: #fff; border-bottom-right-radius: 4px; }}
+  .bubble a {{ color: inherit; font-weight: 600; text-decoration: underline; }}
   .sources {{ margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; }}
   .src {{ background: #f0f0f8; color: #666; font-size: 11px; padding: 3px 10px; border-radius: 20px; }}
   .msg-time {{ font-size: 10px; color: #bbb; margin-top: 3px; }}
@@ -1309,6 +1400,16 @@ function esc(s) {{
   ));
 }}
 
+// Enlaces markdown [texto](url) convertidos a <a> (para los recursos descargables que arma
+// el backend). Corre DESPUÉS de esc(), así solo linkea texto ya escapado. Una URL relativa
+// ("/static/...") se resuelve con API, igual que bot_avatar_url.
+function linkify(escapedHtml) {{
+  return escapedHtml.replace(/\[([^\[\]]+)\]\((\/[^\s()]+|https?:\/\/[^\s()]+)\)/g, (m, text, url) => {{
+    const href = url.startsWith("/") ? API + url : url;
+    return `<a href="${{href}}" target="_blank" rel="noopener">${{text}}</a>`;
+  }});
+}}
+
 // Chips de contacto inline, debajo de un mensaje puntual donde el bot no encontró la
 // respuesta (suggest_contact del backend). Vacío si el bot no tiene contacto configurado.
 function contactChipsHtml() {{
@@ -1328,7 +1429,7 @@ function addMsg(role, content, sources, suggestContact) {{
   const d = document.createElement("div");
   d.className = "msg " + role;
   d.innerHTML = `<div class="msg-av">${{role==="bot"?"{avatar_js}":"👤"}}</div>
-    <div><div class="bubble">${{esc(content).replace(/\\n/g,"<br>")}}${{srcs?`<div class="sources">${{srcs}}</div>`:""}}</div>
+    <div><div class="bubble">${{linkify(esc(content)).replace(/\\n/g,"<br>")}}${{srcs?`<div class="sources">${{srcs}}</div>`:""}}</div>
     <div class="msg-time">${{time}}</div>${{contact}}</div>`;
   m.appendChild(d);
   m.scrollTop = m.scrollHeight;

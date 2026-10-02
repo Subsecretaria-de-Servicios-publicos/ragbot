@@ -194,6 +194,7 @@
       color: #fff;
       border-bottom-right-radius: 4px;
     }
+    .rb-bubble a { color: inherit; font-weight: 600; text-decoration: underline; }
 
     .rb-sources {
       margin-top: 6px; font-size: 11px; color: #888;
@@ -568,7 +569,7 @@
       el.innerHTML = `
         <div class="rb-msg-avatar">${role === 'bot' ? this._avatarHtml(this.config.botAvatar) : '👤'}</div>
         <div>
-          <div class="rb-bubble${isError ? ' style="background:#fff0f0;color:#ef4444"' : ''}">${this._escapeHtml(content)}${sourcesHtml}</div>
+          <div class="rb-bubble${isError ? ' style="background:#fff0f0;color:#ef4444"' : ''}">${this._renderMessageContent(content)}${sourcesHtml}</div>
           <div class="rb-time">${time}</div>
           ${contactHtml}
         </div>`;
@@ -737,6 +738,18 @@
     _escapeHtml(str) {
       return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
                .replace(/"/g,'&quot;').replace(/\n/g,'<br>');
+    }
+
+    // Texto del bot ya escapado + enlaces markdown [texto](url) convertidos a <a> (para los
+    // recursos descargables que arma el backend). Corre DESPUÉS de escapar, así solo linkea
+    // texto ya seguro; una URL relativa ("/static/...") se resuelve con apiUrl, igual que
+    // bot_avatar_url — necesario para que el link funcione embebido en un sitio de terceros.
+    _renderMessageContent(content) {
+      const escaped = this._escapeHtml(content);
+      return escaped.replace(/\[([^\[\]]+)\]\((\/[^\s()]+|https?:\/\/[^\s()]+)\)/g, (m, text, url) => {
+        const href = url.startsWith('/') ? this.config.apiUrl + url : url;
+        return `<a href="${href}" target="_blank" rel="noopener">${text}</a>`;
+      });
     }
   }
 

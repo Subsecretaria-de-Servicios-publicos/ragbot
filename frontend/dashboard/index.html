@@ -504,6 +504,7 @@
         <div class="tab" id="bot-nav-tab-embed" onclick="switchBotTab('embed', this)">🔗 Embed</div>
         <div class="tab" onclick="switchBotTab('stats', this)">📈 Estadísticas</div>
         <div class="tab" onclick="switchBotTab('contact-requests', this)">📨 Consultas</div>
+        <div class="tab" onclick="switchBotTab('files', this)">📎 Archivos</div>
       </div>
 
       <!-- Tab: Documents -->
@@ -832,6 +833,41 @@
               </tr></thead>
               <tbody id="bot-contact-requests-table">
                 <tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Cargando...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Bot Files (descargables) -->
+      <div id="bot-tab-files" style="display:none">
+        <div class="panel" style="margin-bottom:20px">
+          <div class="panel-header"><span class="panel-title">Subir archivo descargable</span></div>
+          <div class="panel-body">
+            <p style="font-size:13px;color:var(--text2);margin-bottom:14px">
+              PDFs que el bot ofrece como link cuando el usuario los pide (ej. "descargame el formulario de reclamo",
+              "quiero la guía de presentación"). A diferencia de los Documentos, estos NO se usan para responder
+              preguntas: el título y la descripción son lo que el bot lee para decidir cuál ofrecer.
+            </p>
+            <div class="form-group">
+              <label class="form-label">Título</label>
+              <input class="form-input" id="bf-title" placeholder="Ej: Formulario de reclamo" maxlength="200">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Descripción (opcional, ayuda al bot a elegir cuándo ofrecerlo)</label>
+              <input class="form-input" id="bf-description" placeholder="Ej: formulario para reclamos ante la Subsecretaría, enviar completo a calidad@salta.gob.ar" maxlength="1000">
+            </div>
+            <input type="file" id="bf-file" accept="application/pdf" style="display:none" onchange="uploadBotFile()">
+            <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('bf-file').click()">📎 Elegir PDF y subir</button>
+            <span id="bf-upload-status" style="font-size:12px;color:var(--text3);margin-left:10px"></span>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-body" style="padding:0">
+            <table>
+              <thead><tr><th>Título</th><th>Descripción</th><th>Archivo</th><th>Tamaño</th><th>Link</th><th>Acción</th></tr></thead>
+              <tbody id="bot-files-table">
+                <tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Sin archivos</td></tr>
               </tbody>
             </table>
           </div>
@@ -1377,6 +1413,7 @@ async function openBotDetail(botId) {
   loadBotConfig(botId);
   loadBotStats(botId);
   loadBotContactRequests(botId);
+  loadBotFiles(botId);
   if (canEmbed) updateEmbedCodes(botId);
   if (canManage) {
     loadApiKeys(botId);
@@ -1502,6 +1539,67 @@ async function deleteDoc(docId) {
     toast('Documento eliminado', 'success');
     loadBotDocuments();
   } catch(e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BOT FILES — PDFs descargables que el bot ofrece por link (formularios, guías)
+// ═══════════════════════════════════════════════════════════════
+async function loadBotFiles(botId) {
+  const tbody = document.getElementById('bot-files-table');
+  try {
+    const files = await api(`/api/v1/chatbots/${botId}/files/`);
+    tbody.innerHTML = files.length ? files.map(f => `
+      <tr>
+        <td class="td-main">${escapeHtml(f.title)}</td>
+        <td class="text-sm" style="max-width:280px">${escapeHtml(f.description || '-')}</td>
+        <td class="text-sm">${escapeHtml(f.original_filename)}</td>
+        <td class="text-mono">${formatBytes(f.file_size)}</td>
+        <td><button class="btn btn-secondary btn-sm" onclick="copyBotFileUrl('${f.url}')">🔗 Copiar link</button></td>
+        <td><button class="btn btn-danger btn-sm" onclick="deleteBotFile('${botId}','${f.id}')">🗑</button></td>
+      </tr>`).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Sin archivos</td></tr>';
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--danger);padding:24px">${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function uploadBotFile() {
+  const fileInput = document.getElementById('bf-file');
+  const file = fileInput.files[0];
+  if (!file) return;
+  const title = document.getElementById('bf-title').value.trim();
+  if (!title) { toast('Poné un título primero', 'error'); fileInput.value = ''; return; }
+
+  const status = document.getElementById('bf-upload-status');
+  status.textContent = 'Subiendo...';
+  const formData = new FormData();
+  formData.append('title', title);
+  formData.append('description', document.getElementById('bf-description').value.trim());
+  formData.append('file', file);
+  try {
+    await apiUpload(`/api/v1/chatbots/${currentBotId}/files/`, formData);
+    status.textContent = '';
+    document.getElementById('bf-title').value = '';
+    document.getElementById('bf-description').value = '';
+    toast('Archivo subido', 'success');
+    loadBotFiles(currentBotId);
+  } catch(e) {
+    status.textContent = '';
+    toast(e.message, 'error');
+  }
+  fileInput.value = '';
+}
+
+async function deleteBotFile(botId, fileId) {
+  if (!confirm('¿Eliminar este archivo? Dejará de estar disponible para que el bot lo ofrezca.')) return;
+  try {
+    await api(`/api/v1/chatbots/${botId}/files/${fileId}`, 'DELETE');
+    toast('Archivo eliminado', 'success');
+    loadBotFiles(botId);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function copyBotFileUrl(relativeUrl) {
+  navigator.clipboard.writeText(API_URL + relativeUrl).then(() => toast('Link copiado', 'success'));
 }
 
 // ═══════════════════════════════════════════════════════════════

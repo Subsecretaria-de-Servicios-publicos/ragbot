@@ -141,7 +141,9 @@ class Chatbot(Base):
 
     owner: Mapped["User"] = relationship("User", back_populates="chatbots")
     documents: Mapped[List["Document"]] = relationship("Document", back_populates="chatbot", cascade="all, delete-orphan")
-    conversations: Mapped[List["Conversation"]] = relationship("Conversation", back_populates="chatbot")
+    # passive_deletes: al borrar el bot, deja que la FK ON DELETE CASCADE de la base borre las
+    # conversaciones (y sus mensajes, en cascada) en vez de que el ORM las cargue una por una.
+    conversations: Mapped[List["Conversation"]] = relationship("Conversation", back_populates="chatbot", passive_deletes=True)
 
 
 # ─── Document ────────────────────────────────────────────────
@@ -204,7 +206,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    chatbot_id: Mapped[str] = mapped_column(String(36), ForeignKey("chatbots.id"))
+    chatbot_id: Mapped[str] = mapped_column(String(36), ForeignKey("chatbots.id", ondelete="CASCADE"))
     session_id: Mapped[str] = mapped_column(String(100), nullable=False)
     user_identifier: Mapped[Optional[str]] = mapped_column(String(255))  # email o fingerprint
     ip_address: Mapped[Optional[str]] = mapped_column(String(45))
@@ -320,5 +322,26 @@ class HumanContactRequest(Base):
     email_sent: Mapped[bool] = mapped_column(Boolean, default=False)  # para diagnosticar si el SMTP falló
     ip_address: Mapped[Optional[str]] = mapped_column(String(45))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    chatbot: Mapped["Chatbot"] = relationship("Chatbot")
+
+
+# ─── BotFile ────────────────────────────────────────────────
+class BotFile(Base):
+    """PDF descargable que el admin carga por bot (formularios, guías, etc.) — distinto de los
+    Document de la base de conocimiento: este NO se chunkea ni se embebe, solo se ofrece como
+    link cuando el usuario lo pide ('descargame el formulario de reclamo'). title/description
+    son lo que el bot lee para decidir cuál ofrecer; se sirve público desde /static."""
+    __tablename__ = "bot_files"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    chatbot_id: Mapped[str] = mapped_column(String(36), ForeignKey("chatbots.id", ondelete="CASCADE"))
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)  # nombre en disco (uuid.pdf)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_by: Mapped[Optional[str]] = mapped_column(String(36))
 
     chatbot: Mapped["Chatbot"] = relationship("Chatbot")
