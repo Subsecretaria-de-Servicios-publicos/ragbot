@@ -7,7 +7,7 @@ intenta poner NULL en esa FK al borrar el padre y la columna es NOT NULL. Se det
 una prueba de otra funcionalidad (bot_files) que de paso ejercitaba delete_chatbot con
 conversaciones ya creadas.
 
-Revision ID: 0013_conversations_chatbot_cascade
+Revision ID: 0013_conv_chatbot_cascade
 Revises: 0012_bot_files
 Create Date: 2026-10-02 00:00:00.000000
 
@@ -18,7 +18,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision: str = '0013_conversations_chatbot_cascade'
+revision: str = '0013_conv_chatbot_cascade'
 down_revision: Union[str, None] = '0012_bot_files'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
