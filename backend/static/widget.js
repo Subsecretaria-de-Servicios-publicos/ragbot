@@ -106,12 +106,56 @@
       min-width: 210px; z-index: 5;
     }
     #rb-help-menu.open { display: block; }
-    #rb-help-menu a {
+    #rb-help-menu a, #rb-help-menu button {
       display: flex; align-items: center; gap: 10px; padding: 11px 14px; font-size: 12.5px;
       color: #333; text-decoration: none; border-bottom: 1px solid #f0f0f5;
+      background: none; border-left: none; border-right: none; border-top: none;
+      width: 100%; text-align: left; cursor: pointer; font-family: inherit;
     }
-    #rb-help-menu a:last-child { border-bottom: none; }
-    #rb-help-menu a:hover { background: #f8f8fc; }
+    #rb-help-menu a:last-child, #rb-help-menu button:last-child { border-bottom: none; }
+    #rb-help-menu a:hover, #rb-help-menu button:hover { background: #f8f8fc; }
+
+    /* Formulario "hablar con una persona" */
+    #rb-contact-form {
+      display: none; position: absolute; inset: 0; background: #fff; z-index: 6;
+      flex-direction: column;
+    }
+    #rb-contact-form.open { display: flex; }
+    .rb-cf-header {
+      background: linear-gradient(135deg, var(--rb-color, #6c63ff), var(--rb-color2, #a78bfa));
+      color: #fff; padding: 14px 16px; display: flex; align-items: center;
+      justify-content: space-between; flex-shrink: 0; font-size: 14px; font-weight: 600;
+    }
+    .rb-cf-header button {
+      background: rgba(255,255,255,0.18); border: none; cursor: pointer; color: #fff;
+      width: 26px; height: 26px; border-radius: 50%; font-size: 13px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .rb-cf-body { padding: 16px; overflow-y: auto; flex: 1; }
+    .rb-cf-body label {
+      display: block; font-size: 12px; font-weight: 600; color: #555; margin-bottom: 4px; margin-top: 12px;
+    }
+    .rb-cf-body label:first-child { margin-top: 0; }
+    .rb-cf-body input, .rb-cf-body textarea {
+      width: 100%; box-sizing: border-box; padding: 8px 11px; border: 1.5px solid #e5e5ef;
+      border-radius: 8px; font-size: 13px; font-family: inherit; outline: none; resize: vertical;
+    }
+    .rb-cf-body input:focus, .rb-cf-body textarea:focus { border-color: var(--rb-color, #6c63ff); }
+    .rb-cf-hint { font-size: 11px; color: #999; margin-top: 10px; }
+    .rb-cf-error { font-size: 12px; color: #ef4444; margin-top: 10px; display: none; }
+    .rb-cf-error.show { display: block; }
+    .rb-cf-submit {
+      width: 100%; margin-top: 14px; background: var(--rb-color, #6c63ff); color: #fff;
+      border: none; border-radius: 8px; padding: 11px; font-size: 13.5px; font-weight: 600;
+      cursor: pointer; transition: filter 0.15s;
+    }
+    .rb-cf-submit:hover { filter: brightness(1.08); }
+    .rb-cf-submit:disabled { opacity: 0.6; cursor: wait; }
+    .rb-cf-wa {
+      display: block; text-align: center; margin-top: 10px; font-size: 12px;
+      color: var(--rb-color, #6c63ff); text-decoration: none;
+    }
+    .rb-cf-wa:hover { text-decoration: underline; }
 
     /* Messages */
     #rb-messages {
@@ -328,6 +372,7 @@
             <button id="rb-close-btn" aria-label="Cerrar">✕</button>
           </div>
           ${this._helpMenuHtml()}
+          ${this._contactFormHtml()}
 
           <div id="rb-messages" role="log" aria-live="polite"></div>
 
@@ -392,6 +437,9 @@
         helpBtn.addEventListener('click', e => { e.stopPropagation(); menu.classList.toggle('open'); });
         document.addEventListener('click', () => menu.classList.remove('open'));
       }
+      document.querySelector('#rb-help-menu .rb-contact-form-btn')?.addEventListener('click', () => this._openContactForm());
+      document.getElementById('rb-cf-close')?.addEventListener('click', () => this._closeContactForm());
+      document.getElementById('rb-cf-submit')?.addEventListener('click', () => this._submitContactForm());
 
       this.elements.send.addEventListener('click', () => this._sendMessage());
       this.elements.input.addEventListener('keydown', e => {
@@ -528,21 +576,71 @@
       this.elements.messages.appendChild(el);
       this.elements.messages.scrollTop = this.elements.messages.scrollHeight;
       this.messages.push({ role, content, time });
+
+      // El chip "Formulario" se arma dinámicamente (no existe al bindear _bindEvents).
+      el.querySelector('.rb-contact-form-btn')?.addEventListener('click', () => this._openContactForm());
     }
 
     // Chips de contacto inline, debajo de un mensaje puntual donde el bot no encontró la
     // respuesta (suggest_contact del backend). Vacío si el bot no tiene contacto configurado.
     _contactChipsHtml() {
       if (!this.config.contactEmail && !this.config.contactWhatsapp) return '';
-      const items = [];
-      if (this.config.contactEmail) {
-        const subject = encodeURIComponent(`Consulta sobre ${this.config.botName}`);
-        items.push(`<a class="rb-contact-chip" href="mailto:${this._escapeHtml(this.config.contactEmail)}?subject=${subject}">✉️ Email</a>`);
-      }
+      const items = ['<button type="button" class="rb-contact-chip rb-contact-form-btn">📝 Formulario</button>'];
       if (this.config.contactWhatsapp) {
         items.push(`<a class="rb-contact-chip" href="https://wa.me/${this._escapeHtml(this.config.contactWhatsapp)}" target="_blank" rel="noopener">🟢 WhatsApp</a>`);
       }
       return `<div class="rb-contact-prompt">¿No era lo que buscabas?<div class="rb-contact-chips">${items.join('')}</div></div>`;
+    }
+
+    _openContactForm() {
+      const menu = document.getElementById('rb-help-menu');
+      if (menu) menu.classList.remove('open');
+      const form = document.getElementById('rb-contact-form');
+      if (!form) return;
+      form.classList.add('open');
+      document.getElementById('rb-cf-error').classList.remove('show');
+      setTimeout(() => document.getElementById('rb-cf-name').focus(), 100);
+    }
+
+    _closeContactForm() {
+      document.getElementById('rb-contact-form')?.classList.remove('open');
+    }
+
+    async _submitContactForm() {
+      const name = document.getElementById('rb-cf-name').value.trim();
+      const email = document.getElementById('rb-cf-email').value.trim();
+      const phone = document.getElementById('rb-cf-phone').value.trim();
+      const question = document.getElementById('rb-cf-question').value.trim();
+      const errorEl = document.getElementById('rb-cf-error');
+      const showError = msg => { errorEl.textContent = msg; errorEl.classList.add('show'); };
+      errorEl.classList.remove('show');
+
+      if (!name) return showError('Contanos tu nombre.');
+      if (!question) return showError('Contanos tu consulta.');
+      if (!email && !phone) return showError('Dejanos un email o un teléfono para poder responderte.');
+
+      const submitBtn = document.getElementById('rb-cf-submit');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Enviando...';
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        if (this.config.apiKey) headers['X-API-Key'] = this.config.apiKey;
+        const res = await fetch(`${this.config.apiUrl}/api/v1/chat/${this.config.botId}/contact-request`, {
+          method: 'POST', headers,
+          body: JSON.stringify({ name, email: email || null, phone: phone || null, question, session_id: this.sessionId }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'No se pudo enviar la consulta');
+
+        this._closeContactForm();
+        ['rb-cf-name', 'rb-cf-email', 'rb-cf-phone', 'rb-cf-question'].forEach(id => { document.getElementById(id).value = ''; });
+        this._appendMessage('bot', data.message);
+      } catch(err) {
+        showError(err.message);
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Enviar consulta';
+      }
     }
 
     _showTyping() {
@@ -583,15 +681,40 @@
 
     _helpMenuHtml() {
       if (!this.config.contactEmail && !this.config.contactWhatsapp) return '';
-      const items = [];
-      if (this.config.contactEmail) {
-        const subject = encodeURIComponent(`Consulta sobre ${this.config.botName}`);
-        items.push(`<a href="mailto:${this._escapeHtml(this.config.contactEmail)}?subject=${subject}">✉️ Escribir por email</a>`);
-      }
+      const items = ['<button type="button" class="rb-contact-form-btn">📝 Completar formulario</button>'];
       if (this.config.contactWhatsapp) {
         items.push(`<a href="https://wa.me/${this._escapeHtml(this.config.contactWhatsapp)}" target="_blank" rel="noopener">🟢 Escribir por WhatsApp</a>`);
       }
       return `<div id="rb-help-menu">${items.join('')}</div>`;
+    }
+
+    // Panel del formulario "hablar con una persona" (overlay dentro de la ventana del chat).
+    _contactFormHtml() {
+      if (!this.config.contactEmail && !this.config.contactWhatsapp) return '';
+      const waLink = this.config.contactWhatsapp
+        ? `<a class="rb-cf-wa" href="https://wa.me/${this._escapeHtml(this.config.contactWhatsapp)}" target="_blank" rel="noopener">🟢 O escribinos directo por WhatsApp</a>`
+        : '';
+      return `
+        <div id="rb-contact-form">
+          <div class="rb-cf-header">
+            <span>Hablar con una persona</span>
+            <button type="button" id="rb-cf-close" aria-label="Cerrar">✕</button>
+          </div>
+          <div class="rb-cf-body">
+            <label for="rb-cf-name">Nombre</label>
+            <input type="text" id="rb-cf-name" maxlength="200">
+            <label for="rb-cf-email">Email</label>
+            <input type="email" id="rb-cf-email">
+            <label for="rb-cf-phone">Teléfono</label>
+            <input type="tel" id="rb-cf-phone" placeholder="Con código de país, ej: 5493871234567">
+            <label for="rb-cf-question">Tu consulta</label>
+            <textarea id="rb-cf-question" rows="4" maxlength="2000"></textarea>
+            <div class="rb-cf-hint">Dejanos un email o un teléfono para poder responderte.</div>
+            <div class="rb-cf-error" id="rb-cf-error"></div>
+            <button type="button" class="rb-cf-submit" id="rb-cf-submit">Enviar consulta</button>
+            ${waLink}
+          </div>
+        </div>`;
     }
 
     // Pie del chat: logo de Modernización si está cargado; si no, el "Powered by" (si showBranding)

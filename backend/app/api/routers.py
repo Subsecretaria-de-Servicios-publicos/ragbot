@@ -16,15 +16,17 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from sqlalchemy import select, func, update, delete, text, or_
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
 import structlog
 
 from app.db.session import get_db
-from app.services.alert_service import notify_bot_failure, notify_bot_event
+from app.services.alert_service import notify_bot_failure, notify_bot_event, send_human_contact_email
 from app.models.models import (
     User, Chatbot, Document, DocumentChunk, Conversation, Message,
     UserRole, DocumentStatus, APIKey, AIProviderConfig, ChatbotAssignment,
+    HumanContactRequest, ContactRequestStatus,
 )
 from app.core.security import (
     hash_password, verify_password,
@@ -66,6 +68,66 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str
     user_identifier: Optional[str] = None
+
+
+class ContactRequestCreate(BaseModel):
+    """Formulario 'hablar con una persona' que completa el usuario final en el chat."""
+    name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    question: str
+    session_id: Optional[str] = None  # para linkear con la conversación, si existe
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, v):
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("El nombre es obligatorio")
+        if len(v) > 200:
+            raise ValueError("El nombre es demasiado largo")
+        return v
+
+    @field_validator("question")
+    @classmethod
+    def _check_question(cls, v):
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("Contanos tu consulta")
+        if len(v) > 2000:
+            raise ValueError("La consulta es demasiado larga (máx 2000 caracteres)")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def _check_email(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return None
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v):
+            raise ValueError("Email inválido")
+        return v
+
+    @field_validator("phone")
+    @classmethod
+    def _check_phone(cls, v):
+        if v is None:
+            return v
+        digits = "".join(c for c in v if c.isdigit())
+        if not digits:
+            return None
+        if not (8 <= len(digits) <= 15):
+            raise ValueError("Teléfono inválido (incluí código de país, ej: 5493871234567)")
+        return digits
+
+    @model_validator(mode="after")
+    def _check_has_contact(self):
+        if not self.email and not self.phone:
+            raise ValueError("Dejanos un email o un teléfono para poder responderte")
+        return self
+
 
 class ChatbotCreate(BaseModel):
     name: str
@@ -1149,21 +1211,60 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
     min-width: 220px; z-index: 5;
   }}
   #help-menu.open {{ display: block; }}
-  #help-menu a {{
+  #help-menu a, #help-menu button {{
     display: flex; align-items: center; gap: 10px; padding: 12px 14px; font-size: 13px;
     color: #333; text-decoration: none; border-bottom: 1px solid #f0f0f5;
+    background: none; border-left: none; border-right: none; border-top: none;
+    width: 100%; text-align: left; cursor: pointer; font-family: inherit;
   }}
-  #help-menu a:last-child {{ border-bottom: none; }}
-  #help-menu a:hover {{ background: #f8f8fc; }}
+  #help-menu a:last-child, #help-menu button:last-child {{ border-bottom: none; }}
+  #help-menu a:hover, #help-menu button:hover {{ background: #f8f8fc; }}
   .contact-prompt {{ margin-top: 6px; font-size: 11px; color: #999; }}
   .contact-chips {{ display: flex; gap: 6px; margin-top: 5px; flex-wrap: wrap; }}
   .contact-chip {{
     display: inline-flex; align-items: center; gap: 4px; background: #fff;
     border: 1.5px solid var(--color); color: var(--color); border-radius: 12px;
-    padding: 5px 10px; font-size: 11.5px; text-decoration: none;
-    transition: background 0.15s, color 0.15s;
+    padding: 5px 10px; font-size: 11.5px; text-decoration: none; cursor: pointer;
+    font-family: inherit; transition: background 0.15s, color 0.15s;
   }}
   .contact-chip:hover {{ background: var(--color); color: #fff; }}
+
+  /* Formulario "hablar con una persona" */
+  #contact-form {{
+    display: none; position: fixed; inset: 0; background: #fff; z-index: 20;
+    flex-direction: column;
+  }}
+  #contact-form.open {{ display: flex; }}
+  .cf-header {{
+    background: linear-gradient(135deg, var(--color), var(--color2)); color: #fff;
+    padding: 14px 20px; display: flex; align-items: center; justify-content: space-between;
+    flex-shrink: 0; font-size: 15px; font-weight: 600;
+  }}
+  .cf-header button {{
+    background: rgba(255,255,255,0.18); border: none; cursor: pointer; color: #fff;
+    width: 28px; height: 28px; border-radius: 50%; font-size: 14px;
+    display: flex; align-items: center; justify-content: center;
+  }}
+  .cf-body {{ padding: 20px; overflow-y: auto; flex: 1; max-width: 480px; width: 100%; margin: 0 auto; box-sizing: border-box; }}
+  .cf-body label {{ display: block; font-size: 13px; font-weight: 600; color: #555; margin-bottom: 5px; margin-top: 16px; }}
+  .cf-body label:first-child {{ margin-top: 0; }}
+  .cf-body input, .cf-body textarea {{
+    width: 100%; box-sizing: border-box; padding: 10px 13px; border: 1.5px solid #e5e5ef;
+    border-radius: 8px; font-size: 14px; font-family: inherit; outline: none; resize: vertical;
+  }}
+  .cf-body input:focus, .cf-body textarea:focus {{ border-color: var(--color); }}
+  .cf-hint {{ font-size: 12px; color: #999; margin-top: 12px; }}
+  .cf-error {{ font-size: 12.5px; color: #ef4444; margin-top: 12px; display: none; }}
+  .cf-error.show {{ display: block; }}
+  .cf-submit {{
+    width: 100%; margin-top: 16px; background: var(--color); color: #fff;
+    border: none; border-radius: 8px; padding: 13px; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: filter 0.15s;
+  }}
+  .cf-submit:hover {{ filter: brightness(1.08); }}
+  .cf-submit:disabled {{ opacity: 0.6; cursor: wait; }}
+  .cf-wa {{ display: block; text-align: center; margin-top: 12px; font-size: 13px; color: var(--color); text-decoration: none; }}
+  .cf-wa:hover {{ text-decoration: underline; }}
 </style>
 </head>
 <body>
@@ -1178,6 +1279,7 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
   {help_button_html}
 </div>
 {help_menu_html}
+{contact_form_html}
 <div class="messages" id="msgs"></div>
 <div class="input-area">
   {attach_button_html}
@@ -1211,11 +1313,7 @@ function esc(s) {{
 // respuesta (suggest_contact del backend). Vacío si el bot no tiene contacto configurado.
 function contactChipsHtml() {{
   if (!CONTACT_EMAIL && !CONTACT_WHATSAPP) return "";
-  const items = [];
-  if (CONTACT_EMAIL) {{
-    const subject = encodeURIComponent("Consulta sobre " + BOT_NAME_JS);
-    items.push(`<a class="contact-chip" href="mailto:${{CONTACT_EMAIL}}?subject=${{subject}}">✉️ Email</a>`);
-  }}
+  const items = ['<button type="button" class="contact-chip contact-form-btn">📝 Formulario</button>'];
   if (CONTACT_WHATSAPP) {{
     items.push(`<a class="contact-chip" href="https://wa.me/${{CONTACT_WHATSAPP}}" target="_blank" rel="noopener">🟢 WhatsApp</a>`);
   }}
@@ -1353,6 +1451,66 @@ if (helpBtn) {{
   helpBtn.addEventListener("click", e => {{ e.stopPropagation(); menu.classList.toggle("open"); }});
   document.addEventListener("click", () => menu.classList.remove("open"));
 }}
+
+function openContactForm() {{
+  const menu = document.getElementById("help-menu");
+  if (menu) menu.classList.remove("open");
+  const form = document.getElementById("contact-form");
+  if (!form) return;
+  form.classList.add("open");
+  document.getElementById("cf-error").classList.remove("show");
+  setTimeout(() => document.getElementById("cf-name").focus(), 100);
+}}
+
+function closeContactForm() {{
+  document.getElementById("contact-form")?.classList.remove("open");
+}}
+
+async function submitContactForm() {{
+  const name = document.getElementById("cf-name").value.trim();
+  const email = document.getElementById("cf-email").value.trim();
+  const phone = document.getElementById("cf-phone").value.trim();
+  const question = document.getElementById("cf-question").value.trim();
+  const errorEl = document.getElementById("cf-error");
+  const showError = msg => {{ errorEl.textContent = msg; errorEl.classList.add("show"); }};
+  errorEl.classList.remove("show");
+
+  if (!name) return showError("Contanos tu nombre.");
+  if (!question) return showError("Contanos tu consulta.");
+  if (!email && !phone) return showError("Dejanos un email o un teléfono para poder responderte.");
+
+  const submitBtn = document.getElementById("cf-submit");
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Enviando...";
+  try {{
+    const headers = {{"Content-Type": "application/json"}};
+    if (API_KEY) headers["X-API-Key"] = API_KEY;
+    const res = await fetch(`${{API}}/api/v1/chat/${{BOT_ID}}/contact-request`, {{
+      method: "POST", headers,
+      body: JSON.stringify({{name, email: email || null, phone: phone || null, question, session_id: SESSION}}),
+    }});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "No se pudo enviar la consulta");
+
+    closeContactForm();
+    ["cf-name", "cf-email", "cf-phone", "cf-question"].forEach(id => {{ document.getElementById(id).value = ""; }});
+    addMsg("bot", data.message);
+  }} catch(e) {{
+    showError(e.message);
+  }} finally {{
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Enviar consulta";
+  }}
+}}
+
+document.getElementById("cf-close")?.addEventListener("click", closeContactForm);
+document.getElementById("cf-submit")?.addEventListener("click", submitContactForm);
+document.querySelector("#help-menu .contact-form-btn")?.addEventListener("click", openContactForm);
+// El chip "Formulario" (inline, tras una respuesta sin resultado) se arma dinámicamente en
+// addMsg(): se delega el click en #msgs en vez de bindear cada chip al insertarlo.
+document.getElementById("msgs").addEventListener("click", e => {{
+  if (e.target.closest(".contact-form-btn")) openContactForm();
+}});
 </script>
 </body>
 </html>"""
@@ -1416,24 +1574,46 @@ async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db
         f'<img class="gov-logo" src="{html.escape(api_url.rstrip("/") + gov_logo_url)}" alt="Gobierno de Salta">'
         if gov_logo_url else ""
     )
-    def _human_contact_menu(bot, id_prefix: str) -> tuple[str, str]:
-        """Botón + menú desplegable de intervención humana. HTML vacío si el bot no tiene
-        contacto configurado. Reutilizado por la página de chat completa; el widget (JS aparte)
-        arma el suyo con la misma info vía config."""
-        items = []
-        if bot.contact_email:
-            mailto = f"mailto:{html.escape(bot.contact_email)}?subject={html.escape(f'Consulta sobre {bot.bot_name or bot.name}')}"
-            items.append(f'<a href="{mailto}">✉️ Escribir por email</a>')
+    def _human_contact_menu(bot, id_prefix: str) -> tuple[str, str, str]:
+        """Botón + menú desplegable + panel del formulario de intervención humana. HTML vacío
+        (los tres) si el bot no tiene contacto configurado. Reutilizado por la página de chat
+        completa; el widget (JS aparte) arma el suyo con la misma info vía config."""
+        has_contact = bool(bot.contact_email or bot.contact_whatsapp)
+        if not has_contact:
+            return "", "", ""
+
+        items = ['<button type="button" class="contact-form-btn">📝 Completar formulario</button>']
         if bot.contact_whatsapp:
             wa = f"https://wa.me/{html.escape(bot.contact_whatsapp)}"
             items.append(f'<a href="{wa}" target="_blank" rel="noopener">🟢 Escribir por WhatsApp</a>')
-        if not items:
-            return "", ""
         button = f'<button type="button" id="{id_prefix}-btn" aria-label="Hablar con una persona" title="Hablar con una persona">🆘</button>'
         menu = f'<div id="{id_prefix}-menu">' + "".join(items) + "</div>"
-        return button, menu
 
-    help_button_html, help_menu_html = _human_contact_menu(bot, "help")
+        wa_link = (
+            f'<a class="cf-wa" href="https://wa.me/{html.escape(bot.contact_whatsapp)}" target="_blank" rel="noopener">'
+            '🟢 O escribinos directo por WhatsApp</a>'
+            if bot.contact_whatsapp else ""
+        )
+        form = f'''<div id="contact-form">
+  <div class="cf-header"><span>Hablar con una persona</span><button type="button" id="cf-close" aria-label="Cerrar">✕</button></div>
+  <div class="cf-body">
+    <label for="cf-name">Nombre</label>
+    <input type="text" id="cf-name" maxlength="200">
+    <label for="cf-email">Email</label>
+    <input type="email" id="cf-email">
+    <label for="cf-phone">Teléfono</label>
+    <input type="tel" id="cf-phone" placeholder="Con código de país, ej: 5493871234567">
+    <label for="cf-question">Tu consulta</label>
+    <textarea id="cf-question" rows="4" maxlength="2000"></textarea>
+    <div class="cf-hint">Dejanos un email o un teléfono para poder responderte.</div>
+    <div class="cf-error" id="cf-error"></div>
+    <button type="button" class="cf-submit" id="cf-submit">Enviar consulta</button>
+    {wa_link}
+  </div>
+</div>'''
+        return button, menu, form
+
+    help_button_html, help_menu_html, contact_form_html = _human_contact_menu(bot, "help")
 
     attach_button_html = (
         '<input type="file" id="file-input" accept="application/pdf" style="display:none">'
@@ -1475,6 +1655,7 @@ async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db
         suggested_questions_js=json.dumps(bot.suggested_questions or []).replace("</", "<\/"),
         help_button_html=help_button_html,
         help_menu_html=help_menu_html,
+        contact_form_html=contact_form_html,
         contact_email_js=js_str(bot.contact_email or ""),
         contact_whatsapp_js=js_str(bot.contact_whatsapp or ""),
         bot_name_js=js_str(bot.bot_name or bot.name),
@@ -1622,6 +1803,127 @@ async def chat_upload_pdf(
         "truncated": page_truncated or char_truncated,
         "message": message,
     }
+
+
+@chat_router.post("/{bot_id}/contact-request")
+async def submit_contact_request(
+    bot_id: str,
+    data: ContactRequestCreate,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Formulario 'hablar con una persona' del chat público: guarda el pedido (se ve desde el
+    dashboard, por bot y global para superadmin) y avisa por mail a bot.contact_email —
+    best-effort, el pedido queda guardado aunque el envío falle."""
+    bot = await db.get(Chatbot, bot_id)
+    if not bot or not bot.is_active or not bot.is_public:
+        raise HTTPException(404, "Chatbot no disponible")
+    if not bot.contact_email and not bot.contact_whatsapp:
+        raise HTTPException(403, "Este bot no tiene habilitado el contacto con una persona")
+    await _authorize_public_chat(bot_id, request, db)
+
+    conversation_id = None
+    if data.session_id:
+        conv = await db.scalar(
+            select(Conversation)
+            .where(Conversation.chatbot_id == bot_id, Conversation.session_id == data.session_id,
+                   Conversation.is_active == True)
+            .order_by(Conversation.started_at.desc())
+        )
+        conversation_id = conv.id if conv else None
+
+    req = HumanContactRequest(
+        chatbot_id=bot_id,
+        conversation_id=conversation_id,
+        name=data.name,
+        email=data.email,
+        phone=data.phone,
+        question=data.question,
+        ip_address=get_client_ip(request),
+    )
+    db.add(req)
+    await db.commit()
+    await db.refresh(req)
+
+    email_sent = False
+    if bot.contact_email:
+        email_sent = await send_human_contact_email(
+            to_email=bot.contact_email, bot_name=bot.bot_name or bot.name,
+            name=data.name, email=data.email or "", phone=data.phone or "", question=data.question,
+        )
+        if email_sent:
+            req.email_sent = True
+            await db.commit()
+
+    logger.info("contact_request_created", bot_id=bot_id, request_id=req.id, email_sent=email_sent)
+    return {"ok": True, "message": "¡Gracias! Recibimos tu consulta y te vamos a contactar a la brevedad."}
+
+
+# ═══════════════════════════════════════════════════════════════
+# CONTACT REQUESTS — formulario "hablar con una persona": lectura/gestión desde el dashboard
+# ═══════════════════════════════════════════════════════════════
+
+contact_requests_router = APIRouter(prefix="/chatbots/{bot_id}/contact-requests", tags=["contact-requests"])
+
+
+def _serialize_contact_request(r: HumanContactRequest, include_bot_name: bool = False) -> dict:
+    out = {
+        "id": r.id, "chatbot_id": r.chatbot_id, "conversation_id": r.conversation_id,
+        "name": r.name, "email": r.email, "phone": r.phone, "question": r.question,
+        "status": r.status.value, "email_sent": r.email_sent,
+        "created_at": r.created_at.isoformat(),
+    }
+    if include_bot_name:
+        out["chatbot_name"] = r.chatbot.name if r.chatbot else None
+    return out
+
+
+@contact_requests_router.get("/")
+async def list_contact_requests(bot_id: str, payload: dict = Depends(require_role("viewer")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    result = await db.execute(
+        select(HumanContactRequest).where(HumanContactRequest.chatbot_id == bot_id)
+        .order_by(HumanContactRequest.created_at.desc())
+    )
+    return [_serialize_contact_request(r) for r in result.scalars().all()]
+
+
+class ContactRequestUpdate(BaseModel):
+    status: ContactRequestStatus
+
+
+@contact_requests_router.patch("/{request_id}")
+async def update_contact_request(
+    bot_id: str, request_id: str, data: ContactRequestUpdate,
+    payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db),
+):
+    await _get_owned_chatbot(bot_id, payload, db)
+    req = await db.get(HumanContactRequest, request_id)
+    if not req or req.chatbot_id != bot_id:
+        raise HTTPException(404, "Consulta no encontrada")
+    req.status = data.status
+    await db.commit()
+    return {"ok": True}
+
+
+admin_contact_router = APIRouter(prefix="/admin/contact-requests", tags=["contact-requests"])
+
+
+@admin_contact_router.get("/")
+async def list_all_contact_requests(
+    status: Optional[ContactRequestStatus] = None,
+    payload: dict = Depends(require_role("superadmin")), db: AsyncSession = Depends(get_db),
+):
+    """Vista global para superadmin: consultas de TODOS los bots."""
+    query = (
+        select(HumanContactRequest)
+        .options(selectinload(HumanContactRequest.chatbot))
+        .order_by(HumanContactRequest.created_at.desc())
+    )
+    if status:
+        query = query.where(HumanContactRequest.status == status)
+    result = await db.execute(query)
+    return [_serialize_contact_request(r, include_bot_name=True) for r in result.scalars().all()]
 
 
 # ═══════════════════════════════════════════════════════════════

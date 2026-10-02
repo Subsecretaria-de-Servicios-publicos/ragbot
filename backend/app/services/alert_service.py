@@ -18,8 +18,8 @@ logger = structlog.get_logger()
 _last_sent: dict[tuple[str, str], float] = {}
 
 
-def _send_email(subject: str, body: str) -> None:
-    recipients = [r.strip() for r in settings.ALERT_EMAIL_TO.split(",") if r.strip()]
+def _send_email_to(to: str, subject: str, body: str) -> None:
+    recipients = [r.strip() for r in to.split(",") if r.strip()]
     msg = EmailMessage()
     msg["Subject"] = subject
     msg["From"] = settings.SMTP_FROM or settings.SMTP_USER
@@ -36,6 +36,10 @@ def _send_email(subject: str, body: str) -> None:
         if settings.SMTP_USER:
             server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
         server.send_message(msg)
+
+
+def _send_email(subject: str, body: str) -> None:
+    _send_email_to(settings.ALERT_EMAIL_TO, subject, body)
 
 
 async def _dispatch(subject: str, body: str) -> None:
@@ -81,6 +85,30 @@ async def notify_bot_failure(bot_id: str, error: Exception) -> None:
         await _dispatch(subject, body)
     except Exception as e:
         logger.error("alert_failed", error=scrub_secrets(str(e)))
+
+
+async def send_human_contact_email(
+    to_email: str, bot_name: str, name: str, email: str, phone: str, question: str,
+) -> bool:
+    """Avisa por mail de una consulta del formulario 'hablar con una persona'. A diferencia de
+    notify_bot_*, NO tiene cooldown: cada consulta es de una persona distinta y no se puede
+    perder (el pedido siempre queda guardado en la BD, esto es solo el aviso por mail,
+    best-effort). Devuelve True si se pudo enviar."""
+    if not (settings.SMTP_HOST and to_email):
+        return False
+    contact_line = ", ".join(filter(None, [f"Email: {email}" if email else "", f"Teléfono: {phone}" if phone else ""]))
+    subject = f"[{settings.APP_NAME}] Nueva consulta en {bot_name} — {name}"
+    body = (
+        f"Nueva consulta recibida en el chat del bot «{bot_name}».\n\n"
+        f"Nombre: {name}\n{contact_line}\n\nPregunta:\n{question}\n\n"
+        "Podés ver y marcar como resuelta esta consulta desde el panel del bot en el dashboard."
+    )
+    try:
+        await asyncio.to_thread(_send_email_to, to_email, subject, scrub_secrets(body))
+        return True
+    except Exception as e:
+        logger.error("contact_request_email_failed", error=scrub_secrets(str(e)))
+        return False
 
 
 async def notify_bot_event(bot_id: str, kind: str, subject: str, body: str) -> None:

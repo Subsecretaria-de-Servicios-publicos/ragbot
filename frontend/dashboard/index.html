@@ -400,6 +400,9 @@
     <div class="nav-item" onclick="showPage('ai-providers')" id="nav-ai-providers">
       <span class="icon">🔌</span> Proveedores de IA
     </div>
+    <div class="nav-item" onclick="showPage('contact-requests')" id="nav-contact-requests">
+      <span class="icon">📨</span> Consultas (todos los bots)
+    </div>
     <div class="nav-section">Sistema</div>
     <div class="nav-item" onclick="showPage('settings')">
       <span class="icon">⚙️</span> Configuración
@@ -500,6 +503,7 @@
         <div class="tab" id="bot-nav-tab-access" onclick="switchBotTab('access', this)">🔑 Acceso</div>
         <div class="tab" id="bot-nav-tab-embed" onclick="switchBotTab('embed', this)">🔗 Embed</div>
         <div class="tab" onclick="switchBotTab('stats', this)">📈 Estadísticas</div>
+        <div class="tab" onclick="switchBotTab('contact-requests', this)">📨 Consultas</div>
       </div>
 
       <!-- Tab: Documents -->
@@ -813,6 +817,26 @@
           </div>
         </div>
       </div>
+
+      <!-- Tab: Contact Requests -->
+      <div id="bot-tab-contact-requests" style="display:none">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Consultas recibidas</span>
+            <span style="font-size:12px;color:var(--text3)">Formulario "Hablar con una persona" del chat público</span>
+          </div>
+          <div class="panel-body" style="padding:0">
+            <table>
+              <thead><tr>
+                <th>Nombre</th><th>Contacto</th><th>Consulta</th><th>Fecha</th><th>Estado</th><th>Acción</th>
+              </tr></thead>
+              <tbody id="bot-contact-requests-table">
+                <tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Cargando...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ══ PAGE: CONVERSATIONS ════════════════════════════ -->
@@ -823,6 +847,29 @@
             <thead><tr><th>Bot</th><th>Session</th><th>Mensajes</th><th>Tokens</th><th>Inicio</th><th>Ver</th></tr></thead>
             <tbody id="all-convs-table">
               <tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Cargando...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ PAGE: CONTACT REQUESTS (global, solo superadmin) ═ -->
+    <div class="page" id="page-contact-requests">
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px">
+        <select class="form-select" id="cr-status-filter" style="width:auto" onchange="loadAllContactRequests()">
+          <option value="">Todas</option>
+          <option value="pending">Pendientes</option>
+          <option value="resolved">Resueltas</option>
+        </select>
+      </div>
+      <div class="panel">
+        <div class="panel-body" style="padding:0">
+          <table>
+            <thead><tr>
+              <th>Bot</th><th>Nombre</th><th>Contacto</th><th>Consulta</th><th>Fecha</th><th>Estado</th><th>Acción</th>
+            </tr></thead>
+            <tbody id="all-contact-requests-table">
+              <tr><td colspan="7" style="text-align:center;color:var(--text3);padding:24px">Cargando...</td></tr>
             </tbody>
           </table>
         </div>
@@ -1120,9 +1167,10 @@ async function initDashboard() {
       document.getElementById('nav-admin-section').style.display = 'none';
       document.getElementById('nav-users').style.display = 'none';
     }
-    // Proveedores de IA (API keys) solo para superadmin
+    // Proveedores de IA (API keys) y vista global de consultas: solo para superadmin
     if (me.role !== 'superadmin') {
       document.getElementById('nav-ai-providers').style.display = 'none';
+      document.getElementById('nav-contact-requests').style.display = 'none';
     }
 
     document.getElementById('login-screen').style.display = 'none';
@@ -1205,7 +1253,7 @@ async function apiUpload(path, formData) {
 const PAGE_TITLES = {
   dashboard: 'Dashboard', chatbots: 'Chatbots', 'bot-detail': 'Detalle del Bot',
   conversations: 'Conversaciones', users: 'Usuarios', settings: 'Configuración',
-  'ai-providers': 'Proveedores de IA',
+  'ai-providers': 'Proveedores de IA', 'contact-requests': 'Consultas (todos los bots)',
 };
 
 function showPage(name) {
@@ -1223,6 +1271,7 @@ function showPage(name) {
   else if (name === 'conversations') loadAllConversations();
   else if (name === 'users') loadUsers();
   else if (name === 'ai-providers') { loadAIProviders(); loadGovLogo(); }
+  else if (name === 'contact-requests') loadAllContactRequests();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1327,6 +1376,7 @@ async function openBotDetail(botId) {
   loadBotDocuments();
   loadBotConfig(botId);
   loadBotStats(botId);
+  loadBotContactRequests(botId);
   if (canEmbed) updateEmbedCodes(botId);
   if (canManage) {
     loadApiKeys(botId);
@@ -1953,6 +2003,63 @@ async function loadBotStats(botId) {
         <td><button class="btn btn-secondary btn-sm" onclick="viewConversation('${c.id}')">Ver</button></td>
       </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:20px">Sin conversaciones</td></tr>';
   } catch(e) { console.error(e); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CONTACT REQUESTS — formulario "Hablar con una persona" del chat público
+// ═══════════════════════════════════════════════════════════════
+function contactRequestRowHtml(r, showBot) {
+  const contact = [r.email, r.phone].filter(Boolean).join(' · ') || '-';
+  const statusBadge = r.status === 'resolved'
+    ? '<span class="badge badge-green">Resuelta</span>'
+    : '<span class="badge badge-yellow">Pendiente</span>';
+  const action = r.status === 'resolved'
+    ? `<button class="btn btn-secondary btn-sm" onclick="setContactRequestStatus('${r.chatbot_id}','${r.id}','pending')">Reabrir</button>`
+    : `<button class="btn btn-primary btn-sm" onclick="setContactRequestStatus('${r.chatbot_id}','${r.id}','resolved')">Marcar resuelta</button>`;
+  return `
+    <tr>
+      ${showBot ? `<td class="td-main">${escapeHtml(r.chatbot_name || r.chatbot_id)}</td>` : ''}
+      <td class="td-main">${escapeHtml(r.name)}</td>
+      <td class="text-sm">${escapeHtml(contact)}</td>
+      <td class="text-sm" style="max-width:320px">${escapeHtml(r.question)}</td>
+      <td class="text-sm">${new Date(r.created_at).toLocaleString('es')}</td>
+      <td>${statusBadge}${r.email_sent ? '' : ' <span title="No se pudo avisar por mail (revisá el SMTP)" style="cursor:help">⚠️</span>'}</td>
+      <td>${action}</td>
+    </tr>`;
+}
+
+async function loadBotContactRequests(botId) {
+  const tbody = document.getElementById('bot-contact-requests-table');
+  try {
+    const reqs = await api(`/api/v1/chatbots/${botId}/contact-requests/`);
+    tbody.innerHTML = reqs.length
+      ? reqs.map(r => contactRequestRowHtml(r, false)).join('')
+      : '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Sin consultas todavía</td></tr>';
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--danger);padding:24px">${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+async function setContactRequestStatus(botId, requestId, status) {
+  try {
+    await api(`/api/v1/chatbots/${botId}/contact-requests/${requestId}`, 'PATCH', { status });
+    loadBotContactRequests(botId);
+    if (document.getElementById('page-contact-requests')?.classList.contains('active')) loadAllContactRequests();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function loadAllContactRequests() {
+  const tbody = document.getElementById('all-contact-requests-table');
+  const status = document.getElementById('cr-status-filter').value;
+  try {
+    const qs = status ? `?status=${status}` : '';
+    const reqs = await api(`/api/v1/admin/contact-requests/${qs}`);
+    tbody.innerHTML = reqs.length
+      ? reqs.map(r => contactRequestRowHtml(r, true)).join('')
+      : '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:24px">Sin consultas</td></tr>';
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--danger);padding:24px">${escapeHtml(e.message)}</td></tr>`;
+  }
 }
 
 async function viewConversation(convId) {

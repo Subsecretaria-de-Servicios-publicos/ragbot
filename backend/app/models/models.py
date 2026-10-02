@@ -295,3 +295,30 @@ class ChatbotAssignment(Base):
     __table_args__ = (
         UniqueConstraint("chatbot_id", "user_id", name="uq_chatbot_assignment"),
     )
+
+
+class ContactRequestStatus(str, enum.Enum):
+    pending = "pending"
+    resolved = "resolved"
+
+
+# ─── HumanContactRequest ──────────────────────────────────────
+class HumanContactRequest(Base):
+    """Formulario de 'hablar con una persona' que completa el usuario final en el chat cuando
+    el bot no le alcanza. Se guarda para verlo desde el dashboard (por bot, y global para
+    superadmin) y se avisa por mail a bot.contact_email (best-effort, no bloquea el guardado)."""
+    __tablename__ = "human_contact_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    chatbot_id: Mapped[str] = mapped_column(String(36), ForeignKey("chatbots.id", ondelete="CASCADE"))
+    conversation_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("conversations.id", ondelete="SET NULL"))
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(255))
+    phone: Mapped[Optional[str]] = mapped_column(String(20))  # solo dígitos con código de país, como contact_whatsapp
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[ContactRequestStatus] = mapped_column(SAEnum(ContactRequestStatus), default=ContactRequestStatus.pending)
+    email_sent: Mapped[bool] = mapped_column(Boolean, default=False)  # para diagnosticar si el SMTP falló
+    ip_address: Mapped[Optional[str]] = mapped_column(String(45))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    chatbot: Mapped["Chatbot"] = relationship("Chatbot")
