@@ -322,8 +322,13 @@ class HumanContactRequest(Base):
     email_sent: Mapped[bool] = mapped_column(Boolean, default=False)  # para diagnosticar si el SMTP falló
     ip_address: Mapped[Optional[str]] = mapped_column(String(45))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Quién la marcó resuelta y cuándo (se completa solo al pasar a 'resolved'; se limpia si
+    # se reabre a 'pending', así siempre refleja la resolución vigente, no el historial).
+    resolved_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"))
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     chatbot: Mapped["Chatbot"] = relationship("Chatbot")
+    resolver: Mapped[Optional["User"]] = relationship("User", foreign_keys=[resolved_by])
 
 
 # ─── BotFile ────────────────────────────────────────────────

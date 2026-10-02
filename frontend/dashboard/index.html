@@ -2111,6 +2111,9 @@ function contactRequestRowHtml(r, showBot) {
   const statusBadge = r.status === 'resolved'
     ? '<span class="badge badge-green">Resuelta</span>'
     : '<span class="badge badge-yellow">Pendiente</span>';
+  const resolvedInfo = (r.status === 'resolved' && r.resolved_at)
+    ? `<div class="text-sm" style="color:var(--text3);margin-top:3px">por ${escapeHtml(r.resolved_by_username || '—')}<br>${new Date(r.resolved_at).toLocaleString('es')}</div>`
+    : '';
   const action = r.status === 'resolved'
     ? `<button class="btn btn-secondary btn-sm" onclick="setContactRequestStatus('${r.chatbot_id}','${r.id}','pending')">Reabrir</button>`
     : `<button class="btn btn-primary btn-sm" onclick="setContactRequestStatus('${r.chatbot_id}','${r.id}','resolved')">Marcar resuelta</button>`;
@@ -2121,7 +2124,7 @@ function contactRequestRowHtml(r, showBot) {
       <td class="text-sm">${escapeHtml(contact)}</td>
       <td class="text-sm" style="max-width:320px">${escapeHtml(r.question)}</td>
       <td class="text-sm">${new Date(r.created_at).toLocaleString('es')}</td>
-      <td>${statusBadge}${r.email_sent ? '' : ' <span title="No se pudo avisar por mail (revisá el SMTP)" style="cursor:help">⚠️</span>'}</td>
+      <td>${statusBadge}${r.email_sent ? '' : ' <span title="No se pudo avisar por mail (revisá el SMTP)" style="cursor:help">⚠️</span>'}${resolvedInfo}</td>
       <td>${action}</td>
     </tr>`;
 }

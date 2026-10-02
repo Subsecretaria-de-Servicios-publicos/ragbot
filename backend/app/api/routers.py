@@ -1973,6 +1973,9 @@ def _serialize_contact_request(r: HumanContactRequest, include_bot_name: bool = 
         "name": r.name, "email": r.email, "phone": r.phone, "question": r.question,
         "status": r.status.value, "email_sent": r.email_sent,
         "created_at": r.created_at.isoformat(),
+        "resolved_at": r.resolved_at.isoformat() if r.resolved_at else None,
+        "resolved_by": r.resolved_by,
+        "resolved_by_username": r.resolver.username if r.resolver else None,
     }
     if include_bot_name:
         out["chatbot_name"] = r.chatbot.name if r.chatbot else None
@@ -1984,6 +1987,7 @@ async def list_contact_requests(bot_id: str, payload: dict = Depends(require_rol
     await _get_owned_chatbot(bot_id, payload, db)
     result = await db.execute(
         select(HumanContactRequest).where(HumanContactRequest.chatbot_id == bot_id)
+        .options(selectinload(HumanContactRequest.resolver))
         .order_by(HumanContactRequest.created_at.desc())
     )
     return [_serialize_contact_request(r) for r in result.scalars().all()]
@@ -2003,6 +2007,13 @@ async def update_contact_request(
     if not req or req.chatbot_id != bot_id:
         raise HTTPException(404, "Consulta no encontrada")
     req.status = data.status
+    if data.status == ContactRequestStatus.resolved:
+        req.resolved_by = payload["sub"]
+        req.resolved_at = datetime.now(timezone.utc)
+    else:
+        # Se reabre: resolved_by/resolved_at reflejan la resolución VIGENTE, no un historial.
+        req.resolved_by = None
+        req.resolved_at = None
     await db.commit()
     return {"ok": True}
 
@@ -2018,7 +2029,7 @@ async def list_all_contact_requests(
     """Vista global para superadmin: consultas de TODOS los bots."""
     query = (
         select(HumanContactRequest)
-        .options(selectinload(HumanContactRequest.chatbot))
+        .options(selectinload(HumanContactRequest.chatbot), selectinload(HumanContactRequest.resolver))
         .order_by(HumanContactRequest.created_at.desc())
     )
     if status:
