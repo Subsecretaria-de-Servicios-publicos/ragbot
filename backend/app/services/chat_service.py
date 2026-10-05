@@ -232,10 +232,33 @@ class ChatService:
             )
 
         # Instrucción JSON interna para respuestas estructuradas (optimiza tokens)
+        # El refuerzo de personalidad va acá, pegado al final (no en medio de INSTRUCCIONES):
+        # probado contra gpt-4o-mini con un system_prompt de personaje marcado (ej. "hablás en
+        # primera persona como Carmen Puch de Güemes") — con "ÚNICAMENTE basándote en el
+        # contexto" + "Cita la fuente", el modelo tiende a citar el contexto casi textual en
+        # tercera persona, ignorando la personalidad, SALVO que el recordatorio esté pegado a
+        # la generación (efecto de recencia). En medio de INSTRUCCIONES no alcanza. Con Gemini
+        # no hacía falta (ya respetaba la personalidad en cualquier posición), pero no afecta a
+        # ningún proveedor: con un bot sin personalidad propia (fallback genérico) el "answer"
+        # sigue siendo neutral, no inventa un personaje.
+        # Encontrado probando lo anterior: con un personaje marcado (ej. "hablás en primera
+        # persona como Carmen Puch de Güemes"), el modelo prioriza "estar en personaje" por
+        # sobre la regla de no inventar — ante una pregunta "personal" que el personaje
+        # "debería saber" (ej. "¿cuántos hijos tuvieron?"), inventaba una respuesta en vez de
+        # admitir que no está en los documentos. Puesto en medio del prompt original no alcanzaba;
+        # pegado acá al final (mismo efecto de recencia) sí lo corrige de forma consistente, sin
+        # romper el caso feliz (preguntas que sí tienen respuesta en el contexto) ni los saludos.
         json_instruction = """
 Responde en JSON con este esquema exacto:
 {"answer": "tu respuesta aquí", "sources": ["doc.pdf p.2", ...], "confidence": 0.9}
-Solo JSON, sin markdown ni explicaciones extra."""
+Solo JSON, sin markdown ni explicaciones extra.
+IMPORTANTE: el campo "answer" tiene que estar SIEMPRE escrito con tu propia voz y personalidad
+(la definida al principio de este prompt), nunca como una cita o parafraseo neutral en tercera
+persona del CONTEXTO DE DOCUMENTOS, aunque el contexto esté redactado así.
+RECORDATORIO FINAL (más importante que sonar en personaje): si no tenés el dato EXACTO en el
+contexto o los documentos cargados, tu personaje JAMÁS inventa ni improvisa datos (fechas,
+nombres, cantidades, hechos) — eso le faltaría el respeto a la verdad. En ese caso "answer"
+debe ser EXACTAMENTE: "No tengo información sobre eso en mis documentos.\""""
 
         messages = [
             ChatMessage(role="system", content=system_content + json_instruction),
