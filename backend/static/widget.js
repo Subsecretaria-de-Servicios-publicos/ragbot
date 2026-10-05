@@ -500,15 +500,23 @@
           body: JSON.stringify({ message: text, session_id: this.sessionId }),
         });
 
+        // Si la respuesta no es JSON válido (ej. una página de error de un proxy por timeout),
+        // res.json() tira acá y cae al catch de abajo — ahí NO hay un "detail" curado que
+        // mostrar, por eso ese caso usa el mensaje genérico (nunca el error técnico crudo).
         const data = await res.json();
         this._hideTyping();
 
-        if (!res.ok) throw new Error(data.detail || 'Error del servidor');
-
+        if (!res.ok) {
+          // Mensaje curado del backend (ej. "no disponible", límite mensual): sí es seguro mostrarlo.
+          this._appendMessage('bot', data.detail || 'Error del servidor', [], true, true);
+          return;
+        }
         this._appendMessage('bot', data.answer, data.sources || [], false, data.suggest_contact);
       } catch(err) {
         this._hideTyping();
-        this._appendMessage('bot', `Lo siento, ocurrió un error. ${err.message}`, [], true);
+        // Fallo de red o respuesta no-JSON (ej. timeout del proxy): mensaje genérico, nunca el
+        // texto técnico del error — y se ofrece el contacto humano si el bot lo tiene configurado.
+        this._appendMessage('bot', 'Uy, tuve un problema técnico y no pude responder. Probá de nuevo en unos minutos.', [], true, true);
       } finally {
         this.isTyping = false;
       }

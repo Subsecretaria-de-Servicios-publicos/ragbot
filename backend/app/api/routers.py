@@ -1476,13 +1476,22 @@ async function send(presetText) {{
       method: "POST", headers,
       body: JSON.stringify({{message: txt, session_id: SESSION}})
     }});
+    // Si la respuesta no es JSON válido (ej. una página de error de un proxy por timeout),
+    // res.json() tira acá y cae al catch de abajo — ahí no hay "detail" curado, por eso ese
+    // caso usa el mensaje genérico (nunca el error técnico crudo).
     const data = await res.json();
     document.getElementById("typing")?.remove();
-    if (!res.ok) throw new Error(data.detail || "Error");
+    if (!res.ok) {{
+      // Mensaje curado del backend (ej. "no disponible", límite mensual): sí es seguro mostrarlo.
+      addMsg("bot", data.detail || "Error del servidor", [], true);
+      return;
+    }}
     addMsg("bot", data.answer, data.sources, data.suggest_contact);
   }} catch(e) {{
     document.getElementById("typing")?.remove();
-    addMsg("bot", "Error al procesar tu consulta: " + e.message);
+    // Fallo de red o respuesta no-JSON (ej. timeout del proxy): mensaje genérico, nunca el
+    // texto técnico del error — y se ofrece el contacto humano si el bot lo tiene configurado.
+    addMsg("bot", "Uy, tuve un problema técnico y no pude responder. Probá de nuevo en unos minutos.", [], true);
   }} finally {{ busy = false; }}
 }}
 
