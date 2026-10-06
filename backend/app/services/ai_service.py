@@ -88,7 +88,7 @@ class AnthropicProvider(BaseAIProvider):
         import anthropic
         self.client = anthropic.AsyncAnthropic(api_key=api_key or settings.ANTHROPIC_API_KEY)
 
-    async def chat(self, messages, model="claude-3-haiku-20240307", temperature=0.7, max_tokens=1000, stream=False) -> AIResponse:
+    async def chat(self, messages, model="claude-haiku-4-5-20251001", temperature=0.7, max_tokens=1000, stream=False) -> AIResponse:
         start = time.monotonic()
 
         # Separar system message

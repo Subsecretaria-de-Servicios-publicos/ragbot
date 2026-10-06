@@ -134,7 +134,7 @@ class ChatbotCreate(BaseModel):
     name: str
     description: Optional[str] = None
     ai_provider: str = "google"
-    ai_model: str = "gemini-1.5-flash"
+    ai_model: str = "gemini-2.5-flash-lite"
     temperature: float = 0.7
     max_tokens: int = 1000
     system_prompt: Optional[str] = None
@@ -886,8 +886,8 @@ ai_providers_router = APIRouter(prefix="/admin/ai-providers", tags=["ai-provider
 # Fallback curado: se usa si nunca se hizo un "actualizar modelos" (o si falla)
 CURATED_MODELS = {
     "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
-    "anthropic": ["claude-3-5-sonnet-20241022", "claude-3-haiku-20240307", "claude-3-opus-20240229"],
-    "google": ["gemini-2.5-flash-lite", "gemini-1.5-pro", "gemini-1.5-flash", "gemini-1.0-pro"],
+    "anthropic": ["claude-sonnet-5", "claude-opus-5-5", "claude-fable-5-1", "claude-haiku-4-5-20251001"],
+    "google": ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.5-flash"],
     "ollama": ["llama3", "llama3:70b", "mistral", "mixtral", "codellama"],
 }
 

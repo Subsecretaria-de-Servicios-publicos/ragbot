@@ -124,8 +124,8 @@ User Question → Embed Query → Vector Search → Context + Question → LLM �
 | Proveedor   | Modelos                          | Variable ENV         |
 |-------------|----------------------------------|----------------------|
 | OpenAI      | gpt-4o, gpt-4-turbo, gpt-3.5    | OPENAI_API_KEY       |
-| Anthropic   | claude-3-5-sonnet, claude-3-haiku| ANTHROPIC_API_KEY    |
-| Google      | gemini-1.5-pro, gemini-2.5-flash-lite | GOOGLE_API_KEY       |
+| Anthropic   | claude-sonnet-5, claude-haiku-4-5-20251001 | ANTHROPIC_API_KEY    |
+| Google      | gemini-2.5-flash-lite, gemini-2.5-flash | GOOGLE_API_KEY       |
 | Ollama      | llama3, mistral (local)          | OLLAMA_BASE_URL      |
 
 ## Niveles de Usuario

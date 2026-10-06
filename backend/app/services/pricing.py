@@ -16,24 +16,30 @@ import structlog
 logger = structlog.get_logger()
 
 # (proveedor, modelo) -> (entrada, salida, entrada cacheada) en USD / 1M tokens.
+# Verificado contra las páginas oficiales de precios el 06/10/2026. Modelos apagados (Gemini 1.x,
+# Claude 3.x) no figuran: si un bot los usa, no responde, así que no tienen precio.
 # La entrada cacheada es None cuando el proveedor no descuenta caché para ese modelo.
 LLM_PRICES: dict[tuple[str, str], tuple[float, float, Optional[float]]] = {
     ("openai", "gpt-4o"): (2.50, 10.00, 1.25),
     ("openai", "gpt-4o-mini"): (0.15, 0.60, 0.075),
     ("openai", "gpt-4-turbo"): (10.00, 30.00, None),
     ("openai", "gpt-3.5-turbo"): (0.50, 1.50, None),
-    ("anthropic", "claude-3-5-sonnet-20241022"): (3.00, 15.00, None),
-    ("anthropic", "claude-3-haiku-20240307"): (0.25, 1.25, None),
-    ("anthropic", "claude-3-opus-20240229"): (15.00, 75.00, None),
-    ("google", "gemini-1.5-pro"): (1.25, 5.00, None),
-    ("google", "gemini-1.5-flash"): (0.075, 0.30, None),
-    ("google", "gemini-2.5-flash-lite"): (0.10, 0.40, None),
-    ("google", "gemini-2.5-flash"): (0.30, 2.50, None),
+    # Anthropic: la app no activa prompt caching, así que no hay entrada cacheada (None).
+    ("anthropic", "claude-sonnet-5"): (2.00, 10.00, None),
+    ("anthropic", "claude-opus-5-5"): (4.00, 20.00, None),
+    ("anthropic", "claude-fable-5-1"): (10.00, 50.00, None),
+    ("anthropic", "claude-haiku-4-5-20251001"): (1.00, 5.00, None),
+    ("google", "gemini-2.5-flash-lite"): (0.10, 0.40, 0.01),
+    ("google", "gemini-2.5-flash"): (0.30, 2.50, 0.03),
+    ("google", "gemini-3.1-flash-lite"): (0.25, 1.50, 0.025),
+    ("google", "gemini-3.5-flash-lite"): (0.30, 2.50, 0.03),
+    ("google", "gemini-3.5-flash"): (1.50, 9.00, 0.15),
 }
 
 # (proveedor, modelo normalizado) -> USD / 1M tokens de entrada.
 EMBEDDING_PRICES: dict[tuple[str, str], float] = {
     ("openai", "text-embedding-3-small"): 0.02,
+    # Precio NO verificado contra la lista oficial (la vigente muestra gemini-embedding-2 a 0.20).
     ("google", "gemini-embedding-001"): 0.15,
 }
 
