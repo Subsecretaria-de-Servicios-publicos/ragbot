@@ -422,8 +422,14 @@
       wrap.innerHTML = this.config.suggestedQuestions
         .map(q => `<button type="button" class="rb-suggestion-btn">${this._escapeHtml(q)}</button>`)
         .join('');
+      // Al tocar una sugerencia se copia al campo de texto (para editarla o completarla) y NO se envía
       wrap.querySelectorAll('.rb-suggestion-btn').forEach((btn, i) => {
-        btn.addEventListener('click', () => this._sendMessage(this.config.suggestedQuestions[i]));
+        btn.addEventListener('click', () => {
+          this.elements.input.value = this.config.suggestedQuestions[i];
+          this.elements.input.style.height = 'auto';
+          this.elements.input.style.height = Math.min(this.elements.input.scrollHeight, 100) + 'px';
+          this.elements.input.focus();
+        });
       });
       this.elements.messages.appendChild(wrap);
       this.elements.messages.scrollTop = this.elements.messages.scrollHeight;
@@ -480,11 +486,10 @@
       this.elements.triggerIcon.textContent = '💬';
     }
 
-    async _sendMessage(presetText) {
-      const text = (presetText !== undefined ? presetText : this.elements.input.value).trim();
+    async _sendMessage() {
+      const text = this.elements.input.value.trim();
       if (!text || this.isTyping) return;
 
-      document.getElementById('rb-suggestions')?.remove();
       this.elements.input.value = '';
       this.elements.input.style.height = 'auto';
       this._appendMessage('user', text);

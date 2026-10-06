@@ -1449,17 +1449,23 @@ function renderSuggestions() {{
     `<button type="button" class="suggestion-btn">${{esc(q)}}</button>`
   ).join("");
   document.getElementById("msgs").appendChild(wrap);
+  // Al tocar una sugerencia se copia al campo de texto (para editarla o completarla) y NO se envía
   wrap.querySelectorAll(".suggestion-btn").forEach((btn, i) => {{
-    btn.addEventListener("click", () => send(SUGGESTED_QUESTIONS[i]));
+    btn.addEventListener("click", () => {{
+      const inp = document.getElementById("inp");
+      inp.value = SUGGESTED_QUESTIONS[i];
+      inp.style.height = "auto";
+      inp.style.height = Math.min(inp.scrollHeight, 110) + "px";
+      inp.focus();
+    }});
   }});
 }}
 renderSuggestions();
 
-async function send(presetText) {{
+async function send() {{
   const inp = document.getElementById("inp");
-  const txt = (presetText !== undefined ? presetText : inp.value).trim();
+  const txt = inp.value.trim();
   if (!txt || busy) return;
-  document.getElementById("suggestions")?.remove();
   inp.value = ""; inp.style.height = "auto";
   addMsg("user", txt);
   // Typing indicator
