@@ -303,7 +303,7 @@
         allowUserUploads: !!config.allowUserUploads,  // permite subir un PDF en el chat
         chatUploadMaxMb: config.chatUploadMaxMb || 8,
         orgLogoUrl: config.orgLogoUrl || null,
-        suggestedQuestions: Array.isArray(config.suggestedQuestions) ? config.suggestedQuestions.slice(0,3) : [],
+        suggestedQuestions: Array.isArray(config.suggestedQuestions) ? config.suggestedQuestions.slice(0,4) : [],
         showBranding: config.showBranding !== false,
         apiKey: config.apiKey || null,
       };

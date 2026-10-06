@@ -579,10 +579,11 @@
               <div class="form-hint">Si cargás al menos uno, aparece un botón 🆘 en el chat para que el usuario pueda escribirle a una persona. Dejalos vacíos para no mostrarlo.</div>
             </div>
             <div class="form-group">
-              <label class="form-label">Preguntas disparadoras (hasta 3)</label>
-              <input class="form-input" id="cfg-suggestion-1" placeholder="Ej: ¿Cómo era Güemes?" maxlength="150" style="margin-bottom:8px">
-              <input class="form-input" id="cfg-suggestion-2" placeholder="Ej: ¿Cuándo nació?" maxlength="150" style="margin-bottom:8px">
-              <input class="form-input" id="cfg-suggestion-3" placeholder="Ej: ¿Cuántos hijos tuvo?">
+              <label class="form-label">Preguntas de ejemplo (hasta 4)</label>
+              <input class="form-input" id="cfg-suggestion-1" placeholder="Ej: ¿Cómo era Güemes?" maxlength="300" style="margin-bottom:8px">
+              <input class="form-input" id="cfg-suggestion-2" placeholder="Ej: ¿Cuándo nació?" maxlength="300" style="margin-bottom:8px">
+              <input class="form-input" id="cfg-suggestion-3" placeholder="Ej: ¿Cuántos hijos tuvo?" maxlength="300" style="margin-bottom:8px">
+              <input class="form-input" id="cfg-suggestion-4" placeholder="Ej: ¿Qué hizo en la guerra gaucha?" maxlength="300">
               <div class="form-hint">Aparecen como botones al inicio del chat, para guiar al usuario sobre qué puede preguntarle al bot. Dejalas vacías para no mostrar ninguna.</div>
             </div>
           </div>
@@ -1615,7 +1616,7 @@ async function loadBotConfig(botId) {
     document.getElementById('cfg-contact-email').value = bot.contact_email || '';
     document.getElementById('cfg-contact-whatsapp').value = bot.contact_whatsapp || '';
     const suggestions = bot.suggested_questions || [];
-    for (let i = 0; i < 3; i++) document.getElementById(`cfg-suggestion-${i+1}`).value = suggestions[i] || '';
+    for (let i = 0; i < 4; i++) document.getElementById(`cfg-suggestion-${i+1}`).value = suggestions[i] || '';
     document.getElementById('cfg-provider').value = bot.ai_provider || 'openai';
     await updateModelOptions('cfg-provider', 'cfg-model');
     document.getElementById('cfg-model').value = bot.ai_model || '';
@@ -1831,7 +1832,7 @@ async function saveBotConfig() {
     system_prompt: document.getElementById('cfg-system-prompt').value,
     contact_email: document.getElementById('cfg-contact-email').value.trim(),
     contact_whatsapp: document.getElementById('cfg-contact-whatsapp').value.trim(),
-    suggested_questions: [1,2,3].map(i => document.getElementById(`cfg-suggestion-${i}`).value.trim()).filter(Boolean),
+    suggested_questions: [1,2,3,4].map(i => document.getElementById(`cfg-suggestion-${i}`).value.trim()).filter(Boolean),
   };
   if (canManageBotSettings()) Object.assign(data, {
     ai_provider: document.getElementById('cfg-provider').value,

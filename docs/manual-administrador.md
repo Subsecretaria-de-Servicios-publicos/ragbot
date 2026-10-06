@@ -33,7 +33,7 @@ su **rol**:
 | Rol | Qué puede hacer |
 |---|---|
 | **Viewer** (visualizador) | Ver los bots a los que tiene acceso, sus conversaciones, estadísticas y consultas. No modifica nada. |
-| **Operator** (operador) | Todo lo de viewer, más: editar la personalidad del bot (nombre, descripción, bienvenida, system prompt, contacto, preguntas disparadoras), subir y borrar documentos y archivos descargables, y marcar consultas como resueltas. |
+| **Operator** (operador) | Todo lo de viewer, más: editar la personalidad del bot (nombre, descripción, bienvenida, system prompt, contacto, preguntas de ejemplo), subir y borrar documentos y archivos descargables, y marcar consultas como resueltas. |
 | **Admin** | Todo lo de operador, más: crear y borrar bots, configurar el modelo de IA y la API key del bot, el límite de gasto, el RAG (Top K y umbral), la publicación del bot, asignar accesos a otros usuarios y crear API keys de acceso al chat. Ve **todos** los bots. |
 | **Superadmin** | Todo lo anterior, más: crear y editar usuarios, administrar los proveedores de IA globales, subir los logos institucionales (Gobierno y Modernización) y ver el listado global de consultas de todos los bots. |
 
@@ -67,7 +67,7 @@ de IA y el system prompt inicial. Luego se entra al bot para completar el resto.
 - **Mensaje de bienvenida:** lo primero que ve el usuario al abrir el chat.
 - **System prompt (personalidad):** la forma de hablar del bot. Describí el tono, el personaje
   o rol y las restricciones. Ver la sección 10 sobre cómo se comporta el bot.
-- **Preguntas disparadoras (hasta 3):** botones que aparecen al inicio del chat para guiar al
+- **Preguntas de ejemplo (hasta 4):** botones que aparecen al inicio del chat para guiar al
   usuario. Al tocar una, el texto se copia al campo de escritura para que el usuario lo edite
   o lo complete antes de enviarlo. Dejarlas vacías oculta la sección.
 - **Contacto para intervención humana:** email y/o WhatsApp (con código de país, sin `+`).

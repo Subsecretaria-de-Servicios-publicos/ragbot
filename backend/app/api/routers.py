@@ -145,7 +145,7 @@ class ChatbotCreate(BaseModel):
     top_k: int = 5
     similarity_threshold: float = 0.7
     is_public: bool = False
-    suggested_questions: Optional[list[str]] = None  # hasta 3, se muestran como botones al inicio del chat
+    suggested_questions: Optional[list[str]] = None  # hasta 4, se muestran como botones de ejemplo al inicio del chat
     contact_email: Optional[str] = None  # contacto para intervención humana
     contact_whatsapp: Optional[str] = None  # ídem, con código de país (se guardan solo dígitos)
     allow_user_uploads: Optional[bool] = None  # permite subir un PDF en el chat para analizarlo (solo admin/owner)
@@ -157,9 +157,9 @@ class ChatbotCreate(BaseModel):
             return v
         v = [q.strip() for q in v if q and q.strip()]
         if len(v) > 3:
-            raise ValueError(f"Máximo 3 preguntas disparadoras")
-        if any(len(q) > 150 for q in v):
-            raise ValueError(f"Cada pregunta disparadora puede tener hasta 150 caracteres")
+            raise ValueError(f"Máximo 4 preguntas de ejemplo")
+        if any(len(q) > 300 for q in v):
+            raise ValueError(f"Cada pregunta de ejemplo puede tener hasta 300 caracteres")
         return v  # [] explícito borra (no None: exclude_none del PATCH lo descartaría)
 
     @field_validator("contact_email")
@@ -203,7 +203,7 @@ class ChatbotUpdate(BaseModel):
     is_active: Optional[bool] = None
     is_public: Optional[bool] = None
     monthly_token_limit: Optional[int] = None  # solo admin; 0 = sin límite
-    suggested_questions: Optional[list[str]] = None  # hasta 3, [] o null = sin sugerencias
+    suggested_questions: Optional[list[str]] = None  # hasta 4, [] o null = sin ejemplos
     contact_email: Optional[str] = None
     contact_whatsapp: Optional[str] = None
     allow_user_uploads: Optional[bool] = None
@@ -215,9 +215,9 @@ class ChatbotUpdate(BaseModel):
             return v
         v = [q.strip() for q in v if q and q.strip()]
         if len(v) > 3:
-            raise ValueError(f"Máximo 3 preguntas disparadoras")
-        if any(len(q) > 150 for q in v):
-            raise ValueError(f"Cada pregunta disparadora puede tener hasta 150 caracteres")
+            raise ValueError(f"Máximo 4 preguntas de ejemplo")
+        if any(len(q) > 300 for q in v):
+            raise ValueError(f"Cada pregunta de ejemplo puede tener hasta 300 caracteres")
         return v  # [] explícito borra (no None: exclude_none del PATCH lo descartaría)
 
     @field_validator("contact_email")
@@ -793,7 +793,7 @@ async def get_widget_script(bot_id: str, request: Request, key: Optional[str] = 
         "govLogoUrl": _gov_logo_url(),  # path "/static/branding/..." (relativo a apiUrl) o null
         "footerLogoUrl": _footer_logo_url(),  # logo de Modernización (pie del chat), idem
         "orgLogoUrl": bot.org_logo_url,  # logo del organismo/secretaría dueña de este bot
-        "suggestedQuestions": bot.suggested_questions or [],  # hasta 3 botones de pregunta al inicio del chat
+        "suggestedQuestions": bot.suggested_questions or [],  # hasta 4 botones de ejemplo al inicio del chat
         "contactEmail": bot.contact_email or None,
         "contactWhatsapp": bot.contact_whatsapp or None,  # solo dígitos con código de país
         "allowUserUploads": bot.allow_user_uploads,  # permite subir un PDF en el chat
@@ -1438,7 +1438,7 @@ function addMsg(role, content, sources, suggestContact) {{
 // Mensaje de bienvenida
 addMsg("bot", {welcome_message_js});
 
-// Preguntas disparadoras: botones para arrancar la charla sin tener que escribir
+// Preguntas de ejemplo: botones para arrancar la charla sin tener que escribir
 const SUGGESTED_QUESTIONS = {suggested_questions_js};
 function renderSuggestions() {{
   if (!SUGGESTED_QUESTIONS.length) return;
