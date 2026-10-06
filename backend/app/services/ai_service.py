@@ -31,6 +31,7 @@ class AIResponse:
     completion_tokens: int
     total_tokens: int
     latency_ms: int
+    cached_prompt_tokens: int = 0  # parte de prompt_tokens servida desde caché del proveedor (cobra menos)
 
 
 # ─── Base Provider ────────────────────────────────────────────
@@ -66,14 +67,18 @@ class OpenAIProvider(BaseAIProvider):
         )
         latency_ms = int((time.monotonic() - start) * 1000)
 
+        usage = response.usage
+        details = getattr(usage, "prompt_tokens_details", None)
+        cached = (getattr(details, "cached_tokens", 0) or 0) if details else 0
         return AIResponse(
             content=response.choices[0].message.content,
             model=model,
             provider="openai",
-            prompt_tokens=response.usage.prompt_tokens,
-            completion_tokens=response.usage.completion_tokens,
-            total_tokens=response.usage.total_tokens,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
             latency_ms=latency_ms,
+            cached_prompt_tokens=cached,
         )
 
 
@@ -185,15 +190,20 @@ class GoogleProvider(BaseAIProvider):
                      (data.get("promptFeedback") or {}).get("blockReason") or "sin contenido"
             raise ValueError(f"Google no devolvió una respuesta ({reason})")
 
+        # Los modelos 2.5 "piensan" antes de responder: esos tokens se cobran como salida, pero
+        # no vienen en candidatesTokenCount. Se suman para no subestimar el costo.
         usage = data.get("usageMetadata") or {}
+        prompt = usage.get("promptTokenCount", 0)
+        completion = usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0)
         return AIResponse(
             content=text_out,
             model=model,
             provider="google",
-            prompt_tokens=usage.get("promptTokenCount", 0),
-            completion_tokens=usage.get("candidatesTokenCount", 0),
-            total_tokens=usage.get("totalTokenCount", 0),
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            total_tokens=prompt + completion,
             latency_ms=latency_ms,
+            cached_prompt_tokens=usage.get("cachedContentTokenCount", 0),
         )
 
 

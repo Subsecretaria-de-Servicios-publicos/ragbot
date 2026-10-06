@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
-from sqlalchemy import select, func, update, delete, text, or_
+from sqlalchemy import select, func, update, delete, text, or_, case
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, EmailStr, field_validator, model_validator
@@ -27,7 +27,7 @@ from app.services.alert_service import notify_bot_failure, notify_bot_event, sen
 from app.models.models import (
     User, Chatbot, Document, DocumentChunk, Conversation, Message,
     UserRole, DocumentStatus, APIKey, AIProviderConfig, ChatbotAssignment,
-    HumanContactRequest, ContactRequestStatus, BotFile,
+    HumanContactRequest, ContactRequestStatus, BotFile, MessageRole,
 )
 from app.core.security import (
     hash_password, verify_password,
@@ -419,6 +419,7 @@ async def list_chatbots(payload: dict = Depends(get_current_user_payload), db: A
              "total_conversations": b.total_conversations,
              "total_messages": b.total_messages,
              "total_tokens_used": b.total_tokens_used,
+             "total_cost_usd": float(b.total_cost_usd or 0),
              "has_ai_key": bool(b.ai_api_key_encrypted) or b.ai_provider.value == "ollama"} for b in bots]
 
 
@@ -450,6 +451,11 @@ async def get_chatbot(bot_id: str, payload: dict = Depends(get_current_user_payl
         "total_conversations": bot.total_conversations,
         "total_messages": bot.total_messages,
         "total_tokens_used": bot.total_tokens_used,
+        "total_prompt_tokens": bot.total_prompt_tokens or 0,
+        "total_completion_tokens": bot.total_completion_tokens or 0,
+        "total_embedding_tokens": bot.total_embedding_tokens or 0,
+        "total_cost_usd": float(bot.total_cost_usd or 0),
+        "usage_month_cost_usd": float(bot.usage_month_cost_usd or 0) if bot.usage_month == current_month() else 0.0,
         "created_at": bot.created_at.isoformat(),
         # API key propia: solo su estado. El valor no sale nunca; el detalle (últimos 4, quién/cuándo) solo para admin.
         "has_ai_key": bool(bot.ai_api_key_encrypted),
@@ -2075,10 +2081,71 @@ async def dashboard_stats(payload: dict = Depends(require_role("viewer")), db: A
     msgs_count = await db.scalar(scoped(
         select(func.count(Message.id)).join(Conversation, Message.conversation_id == Conversation.id),
         Conversation.chatbot_id))
-    total_tokens = await db.scalar(scoped(select(func.sum(Chatbot.total_tokens_used)), Chatbot.id)) or 0
+    mes = current_month()
+    t = (await db.execute(scoped(select(
+        func.coalesce(func.sum(Chatbot.total_tokens_used), 0),
+        func.coalesce(func.sum(Chatbot.total_prompt_tokens), 0),
+        func.coalesce(func.sum(Chatbot.total_completion_tokens), 0),
+        func.coalesce(func.sum(Chatbot.total_embedding_tokens), 0),
+        func.coalesce(func.sum(Chatbot.total_cost_usd), 0),
+        func.coalesce(func.sum(case((Chatbot.usage_month == mes, Chatbot.usage_month_tokens), else_=0)), 0),
+        func.coalesce(func.sum(case((Chatbot.usage_month == mes, Chatbot.usage_month_cost_usd), else_=0)), 0),
+    ), Chatbot.id))).one()
     return {"chatbots": bots_count, "documents_ready": docs_count,
             "conversations": convs_count, "messages": msgs_count,
-            "total_tokens_used": total_tokens}
+            "total_tokens_used": int(t[0]),
+            "total_prompt_tokens": int(t[1]), "total_completion_tokens": int(t[2]),
+            "total_embedding_tokens": int(t[3]), "total_cost_usd": float(t[4]),
+            "usage_month": mes, "month_tokens": int(t[5]), "month_cost_usd": float(t[6])}
+
+
+@analytics_router.get("/bot-usage/{bot_id}")
+async def bot_usage(bot_id: str, days: int = 30, payload: dict = Depends(require_role("viewer")), db: AsyncSession = Depends(get_db)):
+    """Desglose del consumo de un bot. Los mensajes explican el consumo de las conversaciones (por modelo y
+    por día); la diferencia contra los totales del bot es el embedding de la ingesta de documentos."""
+    bot = await _get_owned_chatbot(bot_id, payload, db)
+    days = max(1, min(days, 365))
+    from datetime import timedelta
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    sums = (
+        func.count(Message.id), func.coalesce(func.sum(Message.prompt_tokens), 0),
+        func.coalesce(func.sum(Message.completion_tokens), 0), func.coalesce(func.sum(Message.embedding_tokens), 0),
+        func.coalesce(func.sum(Message.total_tokens), 0), func.coalesce(func.sum(Message.cost_usd), 0),
+        func.count(Message.id).filter(Message.cost_usd.is_(None)),
+    )
+    def row(r):
+        return {"messages": r[0], "prompt_tokens": int(r[1]), "completion_tokens": int(r[2]),
+                "embedding_tokens": int(r[3]), "total_tokens": int(r[4]), "cost_usd": float(r[5]),
+                "unpriced_messages": r[6]}
+
+    attributed = (await db.execute(select(*sums).select_from(Message).join(
+        Conversation, Message.conversation_id == Conversation.id)
+        .where(Conversation.chatbot_id == bot_id, Message.role == MessageRole.assistant))).one()
+    by_model = (await db.execute(select(Message.provider_used, Message.model_used, *sums)
+        .select_from(Message).join(Conversation, Message.conversation_id == Conversation.id)
+        .where(Conversation.chatbot_id == bot_id, Message.role == MessageRole.assistant)
+        .group_by(Message.provider_used, Message.model_used)
+        .order_by(func.sum(Message.total_tokens).desc()))).all()
+    daily = (await db.execute(select(func.date(Message.created_at), *sums)
+        .select_from(Message).join(Conversation, Message.conversation_id == Conversation.id)
+        .where(Conversation.chatbot_id == bot_id, Message.role == MessageRole.assistant, Message.created_at >= since)
+        .group_by(func.date(Message.created_at)).order_by(func.date(Message.created_at)))).all()
+
+    attributed_d = row(attributed)
+    return {
+        "totals": {
+            "tokens": bot.total_tokens_used or 0,
+            "prompt_tokens": bot.total_prompt_tokens or 0,
+            "completion_tokens": bot.total_completion_tokens or 0,
+            "embedding_tokens": bot.total_embedding_tokens or 0,
+            "cost_usd": float(bot.total_cost_usd or 0),
+        },
+        "conversations_attributed": attributed_d,
+        "ingestion_embedding_tokens": max(0, (bot.total_embedding_tokens or 0) - attributed_d["embedding_tokens"]),
+        "by_model": [{"provider": r[0], "model": r[1], **row(r[2:])} for r in by_model],
+        "daily": [{"date": r[0].isoformat(), **row(r[1:])} for r in daily],
+        "days": days,
+    }
 
 
 @analytics_router.get("/conversations/{bot_id}")
@@ -2107,4 +2174,5 @@ async def conversation_messages(conv_id: str, payload: dict = Depends(require_ro
     msgs = result.scalars().all()
     return [{"id": m.id, "role": m.role.value, "content": m.content,
              "model_used": m.model_used, "total_tokens": m.total_tokens,
+             "embedding_tokens": m.embedding_tokens, "cost_usd": m.cost_usd,
              "latency_ms": m.latency_ms, "created_at": m.created_at.isoformat()} for m in msgs]

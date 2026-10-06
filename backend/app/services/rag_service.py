@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.crypto import decrypt_secret, scrub_secrets
 from app.models.models import Chatbot, Document, DocumentChunk, DocumentStatus
+from app.services.bot_keys import record_usage
+from app.services.pricing import embedding_cost_usd, estimate_tokens
 
 logger = structlog.get_logger()
 
@@ -153,12 +155,23 @@ class EmbeddingService:
         self.provider = provider or settings.DEFAULT_EMBEDDING_PROVIDER
         # Key con la que se pagan los embeddings (la del bot si coincide el proveedor; si no, la global de .env)
         self.api_key = api_key
+        # Tokens consumidos por esta instancia (una instancia = un pedido de embeddings).
+        self.tokens_used = 0
+
+    @property
+    def model(self) -> str:
+        return settings.OPENAI_EMBEDDING_MODEL if self.provider == "openai" else settings.GOOGLE_EMBEDDING_MODEL
+
+    @property
+    def cost_usd(self) -> Optional[float]:
+        return embedding_cost_usd(self.provider, self.model, self.tokens_used)
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         loop = asyncio.get_event_loop()
         if self.provider == "openai":
             return await self._openai_embed(texts)
         elif self.provider == "sentence_transformers":
+            self.tokens_used += estimate_tokens(texts)
             return await loop.run_in_executor(None, self._st_embed, texts)
         elif self.provider == "google":
             return await self._google_embed(texts)
@@ -178,6 +191,7 @@ class EmbeddingService:
                 model=settings.OPENAI_EMBEDDING_MODEL, input=batch,
             )
             all_embeddings.extend([e.embedding for e in response.data])
+            self.tokens_used += response.usage.total_tokens
         return all_embeddings
 
     def _st_embed(self, texts: list[str]) -> list[list[float]]:
@@ -233,6 +247,8 @@ class EmbeddingService:
                         if resp.status_code >= 400:
                             raise RuntimeError(f"Google embeddings respondió {resp.status_code} {resp.reason_phrase}")
                         results.append(resp.json()["embedding"]["values"])
+                        # La API de embedContent no informa tokens: se estima por caracteres.
+                        self.tokens_used += estimate_tokens([text_item])
                         break
 
                     except Exception as e:
@@ -262,6 +278,9 @@ class RAGService:
     def __init__(self, db: AsyncSession):
         self.db = db
         self.chunker = TextChunker()
+        # Consumo de embeddings de la última búsqueda (para sumarlo al turno del chat).
+        self.last_embedding_tokens = 0
+        self.last_embedding_cost = 0.0
 
     async def _embedder_for(self, chatbot_id: str) -> EmbeddingService:
         """Embeddings pagados con la key del bot cuando su proveedor es el mismo que el de
@@ -296,6 +315,9 @@ class RAGService:
             texts = [c.content for c in chunks]
             embedder = await self._embedder_for(doc.chatbot_id)
             embeddings = await embedder.embed_texts(texts)
+            # La ingesta también gasta embeddings: se suma al consumo del bot (sin bloquear por límite).
+            await record_usage(self.db, doc.chatbot_id, embedding=embedder.tokens_used,
+                               cost_usd=embedder.cost_usd or 0.0)
 
             db_chunks = []
             for chunk, embedding in zip(chunks, embeddings):
@@ -342,6 +364,9 @@ class RAGService:
         top_k = top_k or settings.TOP_K_RESULTS
         embedder = await self._embedder_for(chatbot_id)
         query_embedding = await embedder.embed_query(query)
+        # Costo de la búsqueda (embedding de la pregunta): lo lee ChatService para el consumo del turno.
+        self.last_embedding_tokens = embedder.tokens_used
+        self.last_embedding_cost = embedder.cost_usd or 0.0
         # El vector debe interpolarse (limitación de pgvector con asyncpg)
         # pero todos los otros valores van como parámetros bind seguros
         embedding_str = "[" + ",".join(f"{v:.8f}" for v in query_embedding) + "]"

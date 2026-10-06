@@ -453,7 +453,12 @@
         <div class="stat-card">
           <div class="stat-label">Tokens Usados</div>
           <div class="stat-value stat-yellow" id="stat-tokens">-</div>
-          <div class="stat-sub">acumulado total</div>
+          <div class="stat-sub" id="stat-tokens-sub">acumulado total</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Costo estimado</div>
+          <div class="stat-value stat-green" id="stat-cost">-</div>
+          <div class="stat-sub" id="stat-cost-sub">USD, según precios de lista</div>
         </div>
       </div>
 
@@ -645,7 +650,7 @@
               <div class="form-group">
                 <label class="form-label">Límite mensual de tokens</label>
                 <input class="form-input" id="cfg-token-limit" type="number" min="0" step="1000" placeholder="Sin límite">
-                <div class="form-hint">0 o vacío = sin límite. Al llegar al 100% el bot deja de responder hasta el mes próximo; se avisa al 80% y al 100% (si hay alertas configuradas). Cuenta los tokens del chat.</div>
+                <div class="form-hint">0 o vacío = sin límite. Al llegar al 100% el bot deja de responder hasta el mes próximo; se avisa al 80% y al 100% (si hay alertas configuradas). Cuenta los tokens del chat y de los embeddings (preguntas y carga de documentos).</div>
               </div>
               <div class="form-group">
                 <label class="form-label">Consumo del mes</label>
@@ -801,8 +806,13 @@
           <div class="stat-card">
             <div class="stat-label">Costo Estimado</div>
             <div class="stat-value stat-green" id="bot-stat-cost">-</div>
-            <div class="stat-sub">USD aprox.</div>
+            <div class="stat-sub" id="bot-stat-cost-sub">USD estimado</div>
           </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header"><span class="panel-title">Consumo por modelo y por día</span></div>
+          <div class="panel-body" id="bot-usage-breakdown"><div style="color:var(--text3)">Cargando…</div></div>
         </div>
 
         <div class="panel">
@@ -1321,6 +1331,10 @@ async function loadDashboardStats() {
     document.getElementById('stat-docs').textContent = stats.documents_ready ?? '-';
     document.getElementById('stat-convs').textContent = stats.conversations ?? '-';
     document.getElementById('stat-tokens').textContent = formatNum(stats.total_tokens_used ?? 0);
+    document.getElementById('stat-tokens-sub').textContent =
+      `entrada ${formatNum(stats.total_prompt_tokens ?? 0)} · salida ${formatNum(stats.total_completion_tokens ?? 0)} · embeddings ${formatNum(stats.total_embedding_tokens ?? 0)}`;
+    document.getElementById('stat-cost').textContent = formatUSD(stats.total_cost_usd);
+    document.getElementById('stat-cost-sub').textContent = `este mes: ${formatUSD(stats.month_cost_usd)}`;
 
     const bots = await api('/api/v1/chatbots/');
     const tbody = document.getElementById('recent-bots-table');
@@ -1373,7 +1387,7 @@ async function loadChatbots() {
             </div>
             <div>
               <div class="stat-label">Tokens</div>
-              <div style="font-size:13px;font-family:var(--mono)">${formatNum(b.total_tokens_used)}</div>
+              <div style="font-size:13px;font-family:var(--mono)">${formatNum(b.total_tokens_used)} · ${formatUSD(b.total_cost_usd)}</div>
             </div>
             <div>
               <div class="stat-label">Mensajes</div>
@@ -1661,9 +1675,10 @@ function renderKeyAndUsage(bot) {
   const limit = bot.monthly_token_limit || 0, used = bot.usage_month_tokens || 0;
   document.getElementById('cfg-token-limit').value = limit || '';
   const pct = limit ? Math.min(100, Math.round(used / limit * 100)) : 0;
+  const costTxt = ` · costo ${formatUSD(bot.usage_month_cost_usd)} (estimado)`;
   document.getElementById('cfg-usage-text').textContent = limit
-    ? `${formatNum(used)} / ${formatNum(limit)} tokens (${pct}%) · ${bot.usage_month}`
-    : `${formatNum(used)} tokens · sin límite · ${bot.usage_month}`;
+    ? `${formatNum(used)} / ${formatNum(limit)} tokens (${pct}%) · ${bot.usage_month}${costTxt}`
+    : `${formatNum(used)} tokens · sin límite · ${bot.usage_month}${costTxt}`;
   const bar = document.getElementById('cfg-usage-bar');
   bar.style.width = (limit ? pct : 0) + '%';
   bar.style.background = pct >= 100 ? 'var(--danger)' : (pct >= 80 ? 'var(--accent3)' : 'var(--accent)');
@@ -2087,9 +2102,9 @@ async function loadBotStats(botId) {
     document.getElementById('bot-stat-convs').textContent = bot.total_conversations ?? '-';
     document.getElementById('bot-stat-msgs').textContent = bot.total_messages ?? '-';
     document.getElementById('bot-stat-tokens').textContent = formatNum(bot.total_tokens_used ?? 0);
-    // Costo estimado (OpenAI gpt-4o-mini ~$0.15/1M tokens)
-    const costUSD = ((bot.total_tokens_used || 0) / 1000000 * 0.15).toFixed(4);
-    document.getElementById('bot-stat-cost').textContent = `$${costUSD}`;
+    document.getElementById('bot-stat-cost').textContent = formatUSD(bot.total_cost_usd);
+    document.getElementById('bot-stat-cost-sub').textContent = `este mes: ${formatUSD(bot.usage_month_cost_usd)}`;
+    loadBotUsage(botId);
 
     const convs = await api(`/api/v1/analytics/conversations/${botId}`);
     const tbody = document.getElementById('bot-convs-table');
@@ -2363,6 +2378,55 @@ function formatNum(n) {
   if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
   if (n >= 1000) return (n/1000).toFixed(1) + 'K';
   return n?.toString() || '0';
+}
+
+// Costos en USD: los centavos chicos (una consulta cuesta fracciones de centavo) se muestran con 4 decimales
+function formatUSD(n) {
+  const v = Number(n) || 0;
+  return '$' + (v >= 1 ? v.toFixed(2) : v.toFixed(4));
+}
+
+async function loadBotUsage(botId) {
+  const box = document.getElementById('bot-usage-breakdown');
+  try {
+    const u = await api(`/api/v1/analytics/bot-usage/${botId}?days=30`);
+    const cell = (v) => `<td class="text-mono">${formatNum(v)}</td>`;
+    const unpriced = (r) => r.unpriced_messages ? ` <span class="badge badge-red" title="Mensajes con modelo sin precio cargado: el costo no los incluye">${r.unpriced_messages} sin precio</span>` : '';
+    const modelRows = u.by_model.map(m => `
+      <tr>
+        <td><span class="badge badge-purple">${escapeHtml(m.provider)}/${escapeHtml(m.model)}</span>${unpriced(m)}</td>
+        <td>${m.messages}</td>${cell(m.prompt_tokens)}${cell(m.completion_tokens)}${cell(m.embedding_tokens)}
+        <td class="text-mono">${formatNum(m.total_tokens)}</td>
+        <td class="text-mono">${formatUSD(m.cost_usd)}</td>
+      </tr>`).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:14px">Sin consultas en el período</td></tr>';
+    const dailyRows = u.daily.map(d => `
+      <tr><td class="text-mono">${d.date}</td><td>${d.messages}</td>
+        <td class="text-mono">${formatNum(d.total_tokens)}</td><td class="text-mono">${formatUSD(d.cost_usd)}</td></tr>`).join('')
+      || '<tr><td colspan="4" style="text-align:center;color:var(--text3);padding:14px">Sin consultas en los últimos días</td></tr>';
+    const t = u.totals;
+    box.innerHTML = `
+      <div class="form-hint" style="margin-bottom:12px">
+        Totales históricos: entrada <b>${formatNum(t.prompt_tokens)}</b> · salida <b>${formatNum(t.completion_tokens)}</b> ·
+        embeddings <b>${formatNum(t.embedding_tokens)}</b> (de los cuales ${formatNum(u.ingestion_embedding_tokens)} son de la carga de documentos) ·
+        costo estimado <b>${formatUSD(t.cost_usd)}</b>.
+        Los embeddings de Google se estiman por longitud del texto (la API no informa tokens).
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr><th>Modelo</th><th>Consultas</th><th>Entrada</th><th>Salida</th><th>Embeddings</th><th>Total</th><th>Costo</th></tr></thead>
+          <tbody>${modelRows}</tbody>
+        </table>
+      </div>
+      <div class="stat-label" style="margin:16px 0 6px">Últimos ${u.days} días</div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr><th>Día</th><th>Consultas</th><th>Tokens</th><th>Costo</th></tr></thead>
+          <tbody>${dailyRows}</tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    box.innerHTML = '<div style="color:var(--text3)">No se pudo cargar el desglose.</div>';
+  }
 }
 
 function formatBytes(bytes) {

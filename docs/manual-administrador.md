@@ -121,11 +121,24 @@ ofrece el formulario. Ollama (local) no necesita key.
   suba el límite.
 - El contador se reinicia automáticamente al cambiar de mes.
 
-### 5.3 Alcance del cálculo de gasto
-- El consumo cuenta los tokens del chat. La carga de embeddings de documentos se paga aparte
-  con la key del proveedor de embeddings del servidor.
-- En **Estadísticas**, el "costo estimado" es una **aproximación** fija (tarifa de referencia),
-  no la factura real del proveedor. Para el costo exacto, consultar el panel del proveedor.
+### 5.3 Qué se cuenta y cómo se estima el gasto
+- El límite mensual cuenta **todos los tokens** del bot: entrada y salida del modelo de chat,
+  más los embeddings (la pregunta de cada consulta y la carga de documentos).
+- Se cuenta también el razonamiento interno de los modelos que lo cobran como salida (por ejemplo,
+  algunos modelos de Google).
+- El **costo estimado en USD** usa los precios de lista del proveedor para cada modelo, separando
+  entrada, salida (con descuento por caché cuando el proveedor lo aplica) y embeddings. Cada consulta
+  guarda su costo al momento de hacerse, así que un cambio de precio futuro no altera el histórico.
+- Los embeddings de Google no informan sus tokens, así que se **estiman** por longitud del texto.
+- Si un modelo no tiene precio cargado en el sistema, sus consultas cuentan tokens pero no costo; el
+  desglose lo marca como "sin precio".
+- El costo es una **aproximación**, no la factura real. Para el monto exacto, consultar el panel del
+  proveedor.
+
+### 5.4 Desglose del consumo
+- En **Estadísticas** de cada bot, la sección **Consumo por modelo y por día** muestra entrada,
+  salida, embeddings, total y costo por modelo, y la serie de los últimos 30 días.
+- La diferencia entre los embeddings del total y los de las consultas es la carga de documentos.
 
 ---
 
@@ -232,7 +245,8 @@ Pestaña **Acceso**:
 
 ## 11. Estadísticas y conversaciones
 
-- **Estadísticas (por bot):** conversaciones, mensajes, tokens usados y costo estimado.
+- **Estadísticas (por bot):** conversaciones, mensajes, tokens usados (desglosados), costo estimado en
+  USD y consumo por modelo y por día.
 - **Conversaciones:** listado de las sesiones del bot. Se puede abrir cada una para leer el
   intercambio completo. Es útil para revisar la calidad de las respuestas y detectar preguntas
   frecuentes sin respuesta (que luego pueden pasar a documentos).
@@ -286,7 +300,7 @@ En **Proveedores de IA → Marca institucional**:
 
 - El bot responde según sus documentos y su configuración: no reemplaza la verificación humana
   en trámites o decisiones formales. Para eso está el contacto humano.
-- El costo estimado de Estadísticas es referencial.
+- El costo estimado de Estadísticas es una aproximación según los precios de lista (ver sección 5.3).
 - Los PDF escaneados requieren OCR en el servidor para poder leerse.
 - Si el modelo elegido tarda demasiado, el proxy del servidor puede cortar la respuesta; en ese
   caso el usuario ve el mensaje genérico. Un modelo más rápido o menos contexto lo evitan.

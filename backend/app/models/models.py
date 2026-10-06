@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy import (
     String, Text, Boolean, Integer, BigInteger, Float, DateTime,
-    ForeignKey, JSON, Enum as SAEnum, UniqueConstraint, Index
+    ForeignKey, JSON, Enum as SAEnum, UniqueConstraint, Index, Numeric
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -130,11 +130,17 @@ class Chatbot(Base):
     usage_month: Mapped[Optional[str]] = mapped_column(String(7))  # "YYYY-MM" (UTC) al que corresponde el contador
     usage_month_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
     usage_alert_level: Mapped[int] = mapped_column(Integer, default=0)  # 0 | 80 | 100: último aviso enviado este mes
+    usage_month_cost_usd: Mapped[float] = mapped_column(Numeric(18, 10, asdecimal=False), default=0)  # costo estimado del mes
 
     # Stats
     total_conversations: Mapped[int] = mapped_column(Integer, default=0)
     total_messages: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens_used: Mapped[int] = mapped_column(Integer, default=0)
+    # Desglose del consumo histórico: entrada/salida del LLM, embeddings (preguntas + ingesta) y costo estimado.
+    total_prompt_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    total_completion_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    total_embedding_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    total_cost_usd: Mapped[float] = mapped_column(Numeric(18, 10, asdecimal=False), default=0)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -240,7 +246,9 @@ class Message(Base):
     provider_used: Mapped[Optional[str]] = mapped_column(String(50))
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
-    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)  # prompt + completion + embeddings del turno
+    embedding_tokens: Mapped[int] = mapped_column(Integer, default=0)  # embedding de la pregunta
+    cost_usd: Mapped[Optional[float]] = mapped_column(Numeric(14, 10, asdecimal=False))  # NULL = modelo sin precio cargado
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
 
     # Chunks usados para generar la respuesta

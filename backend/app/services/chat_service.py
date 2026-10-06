@@ -13,6 +13,7 @@ from app.services.ai_service import AIService, ChatMessage
 from app.services.rag_service import RAGService
 from app.core.config import settings
 from app.services.bot_keys import require_bot_api_key, enforce_monthly_limit, record_usage
+from app.services.pricing import llm_cost_usd, estimate_tokens
 
 logger = structlog.get_logger()
 
@@ -285,6 +286,19 @@ debe ser EXACTAMENTE: "No tengo información sobre eso en mis documentos.\""""
             base_url=base_url_override,
         )
 
+        # Consumo del turno. Si el proveedor no informó tokens (respuesta sin usage), se estiman
+        # por caracteres para no registrar un costo de cero que en realidad se cobró.
+        prompt_tok = ai_response.prompt_tokens
+        completion_tok = ai_response.completion_tokens
+        if not (prompt_tok or completion_tok):
+            prompt_tok = estimate_tokens([m.content for m in messages])
+            completion_tok = estimate_tokens([ai_response.content])
+        embedding_tok = self.rag.last_embedding_tokens
+        llm_cost = llm_cost_usd(chatbot.ai_provider.value, chatbot.ai_model, prompt_tok, completion_tok,
+                                ai_response.cached_prompt_tokens)
+        turn_tokens = prompt_tok + completion_tok + embedding_tok
+        turn_cost = None if llm_cost is None else llm_cost + self.rag.last_embedding_cost
+
         # 6. Parsear respuesta JSON del LLM
         answer_text, sources, confidence = self._parse_json_response(ai_response.content)
 
@@ -308,9 +322,11 @@ debe ser EXACTAMENTE: "No tengo información sobre eso en mis documentos.\""""
             content=answer_text,
             model_used=chatbot.ai_model,
             provider_used=chatbot.ai_provider.value,
-            prompt_tokens=ai_response.prompt_tokens,
-            completion_tokens=ai_response.completion_tokens,
-            total_tokens=ai_response.total_tokens,
+            prompt_tokens=prompt_tok,
+            completion_tokens=completion_tok,
+            embedding_tokens=embedding_tok,
+            total_tokens=turn_tokens,
+            cost_usd=turn_cost,
             latency_ms=total_ms,
             retrieved_chunks=[
                 {"content": c.content[:200], "score": c.score, "source": c.filename, "page": c.page_number}
@@ -323,17 +339,18 @@ debe ser EXACTAMENTE: "No tengo información sobre eso en mis documentos.\""""
         await self.db.execute(
             update(Conversation)
             .where(Conversation.id == conv.id)
-            .values(total_messages=Conversation.total_messages + 2, total_tokens=Conversation.total_tokens + ai_response.total_tokens)
+            .values(total_messages=Conversation.total_messages + 2, total_tokens=Conversation.total_tokens + turn_tokens)
         )
         await self.db.execute(
             update(Chatbot)
             .where(Chatbot.id == chatbot_id)
-            .values(
-                total_messages=Chatbot.total_messages + 2,
-                total_tokens_used=Chatbot.total_tokens_used + ai_response.total_tokens,
-            )
+            .values(total_messages=Chatbot.total_messages + 2)
         )
-        await record_usage(self.db, chatbot, ai_response.total_tokens)
+        await record_usage(
+            self.db, chatbot_id,
+            prompt=prompt_tok, completion=completion_tok, embedding=embedding_tok,
+            cost_usd=(turn_cost or 0.0),
+        )
         await self.db.commit()
 
         return {
@@ -342,7 +359,7 @@ debe ser EXACTAMENTE: "No tengo información sobre eso en mis documentos.\""""
             "confidence": confidence,
             "conversation_id": conv.id,
             "session_id": session_id,
-            "tokens_used": ai_response.total_tokens,
+            "tokens_used": turn_tokens,
             "latency_ms": total_ms,
             "model": f"{chatbot.ai_provider.value}/{chatbot.ai_model}",
             "context_used": bool(rag_chunks) or bool(conv.uploaded_doc_text),
