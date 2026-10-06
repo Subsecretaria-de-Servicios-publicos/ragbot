@@ -156,7 +156,7 @@ class ChatbotCreate(BaseModel):
         if v is None:
             return v
         v = [q.strip() for q in v if q and q.strip()]
-        if len(v) > 3:
+        if len(v) > 4:
             raise ValueError(f"Máximo 4 preguntas de ejemplo")
         if any(len(q) > 300 for q in v):
             raise ValueError(f"Cada pregunta de ejemplo puede tener hasta 300 caracteres")
@@ -214,7 +214,7 @@ class ChatbotUpdate(BaseModel):
         if v is None:
             return v
         v = [q.strip() for q in v if q and q.strip()]
-        if len(v) > 3:
+        if len(v) > 4:
             raise ValueError(f"Máximo 4 preguntas de ejemplo")
         if any(len(q) > 300 for q in v):
             raise ValueError(f"Cada pregunta de ejemplo puede tener hasta 300 caracteres")

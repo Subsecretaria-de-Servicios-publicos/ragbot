@@ -1281,16 +1281,29 @@ async function api(path, method = 'GET', body = null, auth = true) {
   const res = await fetch(`${API_URL}${path}`, opts);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Error' }));
-    throw new Error(err.detail || 'Error');
+    throw new Error(errorMessage(err.detail));
   }
   return res.json();
+}
+
+// FastAPI devuelve detail como texto (errores propios) o como lista de objetos (validación de Pydantic)
+function errorMessage(detail) {
+  if (Array.isArray(detail)) {
+    return detail.map(d => {
+      const campo = Array.isArray(d.loc) ? d.loc.filter(p => p !== 'body').join('.') : '';
+      const msg = String(d.msg || '').replace(/^Value error, /, '');
+      return campo ? `${campo}: ${msg}` : msg;
+    }).join(' · ') || 'Datos no válidos';
+  }
+  if (detail && typeof detail === 'object') return detail.message || JSON.stringify(detail);
+  return detail || 'Error';
 }
 
 async function apiUpload(path, formData) {
   const headers = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(`${API_URL}${path}`, { method: 'POST', headers, body: formData });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || 'Upload error');
+  if (!res.ok) throw new Error(errorMessage((await res.json().catch(() => ({}))).detail) || 'Upload error');
   return res.json();
 }
 
