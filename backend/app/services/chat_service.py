@@ -2,6 +2,7 @@
 app/services/chat_service.py — Servicio de chat optimizado con JSON + RAG + historial
 """
 import json
+import re
 import time
 from typing import Optional, AsyncGenerator
 from sqlalchemy import select, update
@@ -301,6 +302,9 @@ debe ser EXACTAMENTE: "No tengo información sobre eso en mis documentos.\""""
 
         # 6. Parsear respuesta JSON del LLM
         answer_text, sources, confidence = self._parse_json_response(ai_response.content)
+        if ai_response.truncated:
+            # Se cortó por el límite de largo: que el usuario lo sepa y pueda pedir la continuación
+            answer_text += "\n\n(La respuesta quedó incompleta por el largo máximo. Pedí que continúe.)"
 
         # El bot no encontró la respuesta (frase exacta instruida arriba): ofrecer el contacto
         # humano del bot, si tiene alguno cargado. Determinístico — no depende del LLM ni le
@@ -367,16 +371,27 @@ debe ser EXACTAMENTE: "No tengo información sobre eso en mis documentos.\""""
         }
 
     def _parse_json_response(self, raw: str) -> tuple[str, list, float]:
-        """Parsea respuesta JSON del LLM con fallback."""
-        try:
-            # Limpiar posibles backticks markdown
-            clean = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-            data = json.loads(clean)
-            return (
-                data.get("answer", raw),
-                data.get("sources", []),
-                float(data.get("confidence", 0.8)),
-            )
-        except (json.JSONDecodeError, KeyError):
-            # Fallback: usar el texto raw
-            return raw, [], 0.7
+        """Parsea la respuesta JSON del LLM. Tolera texto alrededor del JSON (por ejemplo paréntesis
+        o fences de markdown). Si el JSON quedó cortado por el límite de tokens, rescata lo que se
+        alcanzó a escribir del campo 'answer' en vez de mostrar el JSON crudo."""
+        start, end = raw.find("{"), raw.rfind("}")
+        if start != -1 and end > start:
+            try:
+                data = json.loads(raw[start:end + 1])
+                return (
+                    str(data.get("answer", raw)),
+                    data.get("sources", []) or [],
+                    float(data.get("confidence", 0.8)),
+                )
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                pass
+        # JSON incompleto: el valor de "answer" hasta donde llegó la respuesta
+        m = re.search(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)', raw, re.S)
+        if m:
+            try:
+                answer = json.loads('"' + m.group(1) + '"', strict=False)
+            except json.JSONDecodeError:
+                answer = m.group(1)
+            return answer, [], 0.5
+        # Texto sin JSON: se muestra tal cual
+        return raw, [], 0.7

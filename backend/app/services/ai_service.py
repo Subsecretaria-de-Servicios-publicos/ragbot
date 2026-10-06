@@ -32,6 +32,7 @@ class AIResponse:
     total_tokens: int
     latency_ms: int
     cached_prompt_tokens: int = 0  # parte de prompt_tokens servida desde caché del proveedor (cobra menos)
+    truncated: bool = False  # True si el proveedor cortó la respuesta por el límite de tokens (max_tokens)
 
 
 # ─── Base Provider ────────────────────────────────────────────
@@ -79,6 +80,7 @@ class OpenAIProvider(BaseAIProvider):
             total_tokens=usage.total_tokens,
             latency_ms=latency_ms,
             cached_prompt_tokens=cached,
+            truncated=response.choices[0].finish_reason == "length",
         )
 
 
@@ -120,6 +122,7 @@ class AnthropicProvider(BaseAIProvider):
             completion_tokens=response.usage.output_tokens,
             total_tokens=response.usage.input_tokens + response.usage.output_tokens,
             latency_ms=latency_ms,
+            truncated=response.stop_reason == "max_tokens",
         )
 
 
@@ -204,6 +207,7 @@ class GoogleProvider(BaseAIProvider):
             total_tokens=prompt + completion,
             latency_ms=latency_ms,
             cached_prompt_tokens=usage.get("cachedContentTokenCount", 0),
+            truncated=(candidates[0].get("finishReason") == "MAX_TOKENS") if candidates else False,
         )
 
 
@@ -235,6 +239,7 @@ class OllamaProvider(BaseAIProvider):
             completion_tokens=data.get("eval_count", 0),
             total_tokens=data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
             latency_ms=latency_ms,
+            truncated=data.get("done_reason") == "length",
         )
 
 
