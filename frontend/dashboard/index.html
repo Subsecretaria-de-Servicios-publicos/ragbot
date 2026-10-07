@@ -769,6 +769,15 @@
               <a id="embed-fullpage" href="#" target="_blank" class="btn btn-secondary btn-sm">🔗 Abrir en nueva pestaña</a>
             </div>
 
+            <div class="form-group">
+              <label class="form-label">Vista previa en burbuja</label>
+              <p style="font-size:13px;color:var(--text2);margin:0 0 8px">
+                Cómo se ve embebido en un sitio, igual que quedaría en producción. Es una prueba real:
+                si escribís, consume tokens.
+              </p>
+              <a id="embed-preview" href="#" target="_blank" class="btn btn-secondary btn-sm">👁 Ver burbuja</a>
+            </div>
+
             <div style="margin-top:20px">
               <label class="form-label">Colores del Widget</label>
               <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
@@ -1901,6 +1910,8 @@ async function updateEmbedCodes(botId) {
   document.getElementById('embed-script-1').textContent = script1;
   document.getElementById('embed-script-2').textContent = script2;
   document.getElementById('embed-fullpage').href = `${API_URL}/api/v1/chat/${botId}`;
+  document.getElementById('embed-preview').href =
+    `preview.html?api=${encodeURIComponent(API_URL)}&bot=${encodeURIComponent(botId)}`;
 
   try {
     const bot = await api(`/api/v1/chatbots/${botId}`);
