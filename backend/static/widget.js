@@ -32,6 +32,10 @@
       0%, 100% { box-shadow: 0 4px 20px rgba(0,0,0,0.25); }
       50% { box-shadow: 0 4px 28px var(--rb-color, #6c63ff), 0 0 0 8px rgba(108,99,255,0.12); }
     }
+    #rb-trigger-icon {
+      width: 100%; height: 100%; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+    }
     #ragbot-trigger.bottom-right { bottom: 24px; right: 24px; }
     #ragbot-trigger.bottom-left { bottom: 24px; left: 24px; }
     #ragbot-trigger.top-right { top: 24px; right: 24px; }
@@ -355,7 +359,7 @@
       container.innerHTML = `
         <!-- Trigger Button -->
         <button id="ragbot-trigger" class="${this.config.position}" aria-label="Abrir chat">
-          <span id="rb-trigger-icon">💬</span>
+          <span id="rb-trigger-icon">${this._triggerIconHtml()}</span>
           <span id="ragbot-badge">1</span>
         </button>
 
@@ -475,7 +479,7 @@
     open() {
       this.isOpen = true;
       this.elements.window.classList.add('open');
-      this.elements.triggerIcon.textContent = '✕';
+      this.elements.triggerIcon.innerHTML = '✕';
       this.elements.badge.style.display = 'none';
       setTimeout(() => this.elements.input.focus(), 300);
     }
@@ -483,7 +487,7 @@
     close() {
       this.isOpen = false;
       this.elements.window.classList.remove('open');
-      this.elements.triggerIcon.textContent = '💬';
+      this.elements.triggerIcon.innerHTML = this._triggerIconHtml();
     }
 
     async _sendMessage() {
@@ -672,9 +676,21 @@
       document.getElementById('rb-typing-indicator')?.remove();
     }
 
+    // Ícono de la burbuja cerrada: el avatar del bot si subió una imagen, el 💬 de siempre si no.
+    // botAvatar siempre tiene un valor (cae en el emoji 🤖 por defecto): no alcanza con chequear
+    // que exista, hay que chequear que sea una imagen de verdad — si no, todos los bots sin avatar
+    // propio mostrarían el robot en vez del globo de chat de siempre.
+    _triggerIconHtml() {
+      return this._isImageAvatar(this.config.botAvatar) ? this._avatarHtml(this.config.botAvatar) : '💬';
+    }
+
+    _isImageAvatar(value) {
+      return typeof value === 'string' && (/^https?:\/\//.test(value) || value.startsWith('/'));
+    }
+
     _avatarHtml(value) {
       if (!value) return '🤖';
-      if (/^https?:\/\//.test(value) || value.startsWith('/')) {
+      if (this._isImageAvatar(value)) {
         const src = value.startsWith('/') ? this.config.apiUrl + value : value;
         return `<img src="${this._escapeHtml(src)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;display:block">`;
       }
