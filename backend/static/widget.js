@@ -209,7 +209,7 @@
       border-radius: 20px; font-size: 11px;
     }
 
-    .rb-time { font-size: 10px; color: #bbb; margin-top: 4px; text-align: right; }
+    .rb-time { font-size: 10px; color: #bbb; margin-top: 7px; text-align: right; }
 
     .rb-contact-prompt { margin-top: 6px; font-size: 11px; color: #999; }
     .rb-contact-chips { display: flex; gap: 6px; margin-top: 5px; flex-wrap: wrap; }

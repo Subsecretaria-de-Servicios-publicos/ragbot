@@ -1918,7 +1918,7 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
   .bubble a {{ color: inherit; font-weight: 600; text-decoration: underline; }}
   .sources {{ margin-top: 8px; display: flex; flex-wrap: wrap; gap: 4px; }}
   .src {{ background: #f0f0f8; color: #666; font-size: 11px; padding: 3px 10px; border-radius: 20px; }}
-  .msg-time {{ font-size: 10px; color: #bbb; margin-top: 3px; }}
+  .msg-time {{ font-size: 10px; color: #bbb; margin-top: 7px; text-align: right; }}
   .typing {{ display: flex; align-items: center; gap: 4px; padding: 12px 15px;
              background: #fff; border-radius: 18px; border-bottom-left-radius: 4px;
              width: fit-content; box-shadow: 0 1px 4px rgba(0,0,0,0.07); }}
