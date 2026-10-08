@@ -167,6 +167,11 @@ class Document(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     page_count: Mapped[int] = mapped_column(Integer, default=0)
+    # "upload" = PDF/TXT/DOCX subido por un admin (el caso normal). "knowledge_table" = el
+    # documento "virtual" que agrupa los chunks de una KnowledgeTable (no tiene archivo real en
+    # disco). Se usa para que la pestaña Documentos no los muestre ni se puedan borrar ahí —
+    # se gestionan desde Base de conocimiento, que al borrar la tabla borra este Document también.
+    source: Mapped[str] = mapped_column(String(20), default="upload")
     uploaded_by: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"))
     processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -358,3 +363,163 @@ class BotFile(Base):
     created_by: Mapped[Optional[str]] = mapped_column(String(36))
 
     chatbot: Mapped["Chatbot"] = relationship("Chatbot")
+
+
+# ─── BotForm ────────────────────────────────────────────────
+class FormFieldType(str, enum.Enum):
+    text = "text"
+    number = "number"
+    email = "email"
+    file = "file"
+
+
+class BotForm(Base):
+    """Formulario que arma el admin para que el bot le pida datos estructurados al usuario final
+    (ej. 'Certificado médico': DNI, nombre, adjuntar el PDF). Los campos los define el admin, no
+    son fijos. Las respuestas quedan para que el staff las revise desde el dashboard — el bot no
+    vuelve a consultarlas."""
+    __tablename__ = "bot_forms"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    chatbot_id: Mapped[str] = mapped_column(String(36), ForeignKey("chatbots.id", ondelete="CASCADE"))
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)  # texto que ve el usuario antes de los campos
+    success_message: Mapped[Optional[str]] = mapped_column(Text)  # al enviar; default genérico si no se carga
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    created_by: Mapped[Optional[str]] = mapped_column(String(36))
+
+    chatbot: Mapped["Chatbot"] = relationship("Chatbot")
+    fields: Mapped[List["BotFormField"]] = relationship(
+        "BotFormField", back_populates="form", cascade="all, delete-orphan", order_by="BotFormField.order")
+    submissions: Mapped[List["BotFormSubmission"]] = relationship(
+        "BotFormSubmission", back_populates="form", cascade="all, delete-orphan")
+
+
+class BotFormField(Base):
+    """Un campo del formulario, en el orden en que lo arma el admin. `key` es el nombre interno
+    (se usa para guardar la respuesta y para el multipart del envío); `label` es lo que ve el
+    usuario."""
+    __tablename__ = "bot_form_fields"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    form_id: Mapped[str] = mapped_column(String(36), ForeignKey("bot_forms.id", ondelete="CASCADE"))
+    key: Mapped[str] = mapped_column(String(100), nullable=False)
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    field_type: Mapped[FormFieldType] = mapped_column(SAEnum(FormFieldType), nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, default=True)
+    help_text: Mapped[Optional[str]] = mapped_column(String(300))
+    order: Mapped[int] = mapped_column(Integer, default=0)
+
+    form: Mapped["BotForm"] = relationship("BotForm", back_populates="fields")
+
+
+class BotFormSubmission(Base):
+    """Una respuesta del formulario, completada por el usuario final en el chat. `data` guarda los
+    campos de texto/número/email (clave = BotFormField.key); los archivos van en `files`. Mismo
+    flujo de revisión que HumanContactRequest: pending/resolved, lo gestiona el staff del bot."""
+    __tablename__ = "bot_form_submissions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    form_id: Mapped[str] = mapped_column(String(36), ForeignKey("bot_forms.id", ondelete="CASCADE"))
+    chatbot_id: Mapped[str] = mapped_column(String(36), ForeignKey("chatbots.id", ondelete="CASCADE"))
+    conversation_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("conversations.id", ondelete="SET NULL"))
+    data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    status: Mapped[ContactRequestStatus] = mapped_column(SAEnum(ContactRequestStatus), default=ContactRequestStatus.pending)
+    ip_address: Mapped[Optional[str]] = mapped_column(String(45))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    resolved_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"))
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    form: Mapped["BotForm"] = relationship("BotForm", back_populates="submissions")
+    chatbot: Mapped["Chatbot"] = relationship("Chatbot")
+    resolver: Mapped[Optional["User"]] = relationship("User", foreign_keys=[resolved_by])
+    files: Mapped[List["BotFormSubmissionFile"]] = relationship(
+        "BotFormSubmissionFile", back_populates="submission", cascade="all, delete-orphan")
+
+
+class BotFormSubmissionFile(Base):
+    """Un archivo adjunto a una respuesta (ej. el certificado médico). Puede haber más de un
+    campo tipo 'file' por formulario, field_key dice a cuál corresponde. Se sirve solo a usuarios
+    con acceso al bot (no es público como BotFile): puede ser información sensible."""
+    __tablename__ = "bot_form_submission_files"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    submission_id: Mapped[str] = mapped_column(String(36), ForeignKey("bot_form_submissions.id", ondelete="CASCADE"))
+    field_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)  # nombre en disco (uuid.ext)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[Optional[str]] = mapped_column(String(100))
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    submission: Mapped["BotFormSubmission"] = relationship("BotFormSubmission", back_populates="files")
+
+
+# ─── KnowledgeTable ─────────────────────────────────────────
+class KnowledgeFieldType(str, enum.Enum):
+    text = "text"
+    number = "number"
+    email = "email"
+    date = "date"
+
+
+class KnowledgeTable(Base):
+    """Base de conocimiento estructurada que arma el admin (ej. "Empleados", "Trámites",
+    "Oficinas"): columnas a elección y filas. El bot la consulta para responder preguntas —
+    no es un formulario para el usuario final, es información que carga el admin.
+
+    Técnicamente cada fila es un chunk más del mismo pipeline de RAG que los documentos: se
+    guarda como texto en un Document "virtual" (1 por tabla, sin archivo real) y se embebe con
+    la misma key del bot. RAGService.search() ya las encuentra junto con los PDF, sin tocar el
+    chat ni el widget."""
+    __tablename__ = "knowledge_tables"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    chatbot_id: Mapped[str] = mapped_column(String(36), ForeignKey("chatbots.id", ondelete="CASCADE"))
+    document_id: Mapped[str] = mapped_column(String(36), ForeignKey("documents.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    created_by: Mapped[Optional[str]] = mapped_column(String(36))
+
+    chatbot: Mapped["Chatbot"] = relationship("Chatbot")
+    document: Mapped["Document"] = relationship("Document")
+    fields: Mapped[List["KnowledgeField"]] = relationship(
+        "KnowledgeField", back_populates="table", cascade="all, delete-orphan", order_by="KnowledgeField.order")
+    rows: Mapped[List["KnowledgeRow"]] = relationship(
+        "KnowledgeRow", back_populates="table", cascade="all, delete-orphan")
+
+
+class KnowledgeField(Base):
+    """Una columna de la tabla. Solo se pueden AGREGAR después de creada — no borrar ni
+    renombrar: si se les cambiara la key, las filas ya cargadas quedarían con datos guardados
+    bajo una clave que ya no existe. Para cambiar el esquema, se borra la tabla y se crea otra."""
+    __tablename__ = "knowledge_fields"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    table_id: Mapped[str] = mapped_column(String(36), ForeignKey("knowledge_tables.id", ondelete="CASCADE"))
+    key: Mapped[str] = mapped_column(String(100), nullable=False)
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    field_type: Mapped[KnowledgeFieldType] = mapped_column(SAEnum(KnowledgeFieldType), nullable=False)
+    order: Mapped[int] = mapped_column(Integer, default=0)
+
+    table: Mapped["KnowledgeTable"] = relationship("KnowledgeTable", back_populates="fields")
+
+
+class KnowledgeRow(Base):
+    """Una fila (clave de KnowledgeField.key -> valor). chunk_id apunta al DocumentChunk que
+    representa esta fila en la búsqueda del bot — se reembebe cada vez que se edita la fila."""
+    __tablename__ = "knowledge_rows"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    table_id: Mapped[str] = mapped_column(String(36), ForeignKey("knowledge_tables.id", ondelete="CASCADE"))
+    data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    chunk_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("document_chunks.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    created_by: Mapped[Optional[str]] = mapped_column(String(36))
+
+    table: Mapped["KnowledgeTable"] = relationship("KnowledgeTable", back_populates="rows")

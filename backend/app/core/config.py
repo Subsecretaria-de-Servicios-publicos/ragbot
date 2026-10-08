@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     CHAT_UPLOAD_MAX_PAGES: int = 30
     CHAT_UPLOAD_MAX_CHARS: int = 16000  # ~4000 tokens, mismo orden que MAX_CONTEXT_TOKENS
 
+    # Archivos adjuntos a un formulario del bot (ej. certificado médico): no se leen ni se
+    # indexan, solo quedan guardados para que el staff los revise — por eso se acepta también
+    # imagen, no solo PDF (una foto del certificado es un caso común).
+    FORM_FILE_MAX_SIZE_MB: int = 10
+
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_WINDOW_SECONDS: int = 60
 
@@ -106,6 +111,10 @@ class Settings(BaseSettings):
     @property
     def chat_upload_max_size_bytes(self) -> int:
         return self.CHAT_UPLOAD_MAX_SIZE_MB * 1024 * 1024
+
+    @property
+    def form_file_max_size_bytes(self) -> int:
+        return self.FORM_FILE_MAX_SIZE_MB * 1024 * 1024
 
 
 @lru_cache()

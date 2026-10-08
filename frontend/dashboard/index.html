@@ -510,6 +510,8 @@
         <div class="tab" onclick="switchBotTab('stats', this)">📈 Estadísticas</div>
         <div class="tab" onclick="switchBotTab('contact-requests', this)">📨 Consultas</div>
         <div class="tab" onclick="switchBotTab('files', this)">📎 Archivos</div>
+        <div class="tab" onclick="switchBotTab('forms', this)">📋 Formularios</div>
+        <div class="tab" onclick="switchBotTab('knowledge', this)">🗄️ Base de conocimiento</div>
       </div>
 
       <!-- Tab: Documents -->
@@ -893,6 +895,62 @@
           </div>
         </div>
       </div>
+
+      <!-- Tab: Bot Forms (formularios al usuario: pide datos + archivo) -->
+      <div id="bot-tab-forms" style="display:none">
+        <div class="panel" style="margin-bottom:20px">
+          <div class="panel-header">
+            <span class="panel-title">Formularios</span>
+            <button class="btn btn-primary btn-sm" onclick="openBotFormBuilder()">+ Nuevo formulario</button>
+          </div>
+          <div class="panel-body">
+            <p style="font-size:13px;color:var(--text2);margin-bottom:0">
+              El bot le pide estos datos al usuario cuando los necesita (ej. "Certificado médico": DNI, nombre,
+              adjuntar el PDF). Los campos los definís vos, no son fijos. Las respuestas quedan acá para que el
+              equipo las revise — el bot no vuelve a consultarlas.
+            </p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-body" style="padding:0">
+            <table>
+              <thead><tr><th>Título</th><th>Campos</th><th>Estado</th><th>Respuestas</th><th>Acción</th></tr></thead>
+              <tbody id="bot-forms-table">
+                <tr><td colspan="5" style="text-align:center;color:var(--text3);padding:24px">Cargando...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Knowledge Tables (base de conocimiento estructurada) -->
+      <div id="bot-tab-knowledge" style="display:none">
+        <div class="panel" style="margin-bottom:20px">
+          <div class="panel-header">
+            <span class="panel-title">Base de conocimiento</span>
+            <button class="btn btn-primary btn-sm" onclick="openKnowledgeTableBuilder()">+ Nueva tabla</button>
+          </div>
+          <div class="panel-body">
+            <p style="font-size:13px;color:var(--text2);margin-bottom:0">
+              Tablas con las columnas que definas (ej. "Empleados": DNI, nombre, área) para que el bot las
+              consulte al responder — es información que cargás vos, no el usuario. Cada fila se indexa junto
+              con los documentos, así que el bot la encuentra igual que cualquier otro contenido. Los campos
+              se pueden agregar después, pero no borrar ni renombrar: si hace falta cambiar el esquema, se
+              crea una tabla nueva.
+            </p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-body" style="padding:0">
+            <table>
+              <thead><tr><th>Nombre</th><th>Columnas</th><th>Filas</th><th>Acción</th></tr></thead>
+              <tbody id="bot-knowledge-table">
+                <tr><td colspan="4" style="text-align:center;color:var(--text3);padding:24px">Cargando...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ══ PAGE: CONVERSATIONS ════════════════════════════ -->
@@ -1168,6 +1226,132 @@
 </div>
 
 <!-- ══ MODAL: CONVERSATION VIEWER ═════════════════════════ -->
+<div class="modal-overlay" id="modal-bot-form">
+  <div class="modal" style="width:560px">
+    <div class="modal-header">
+      <span class="modal-title" id="bf-modal-title">Nuevo formulario</span>
+      <button class="btn-close" onclick="closeModal('modal-bot-form')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Título</label>
+        <input class="form-input" id="bfm-title" placeholder="Ej: Certificado médico" maxlength="200">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Descripción (el usuario la ve antes de los campos, opcional)</label>
+        <input class="form-input" id="bfm-description" placeholder="Ej: Completá tus datos y adjuntá el certificado" maxlength="2000">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Mensaje de confirmación (opcional)</label>
+        <input class="form-input" id="bfm-success" placeholder="Por defecto: ¡Gracias! Recibimos tu información." maxlength="2000">
+      </div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="bfm-active" checked> Formulario activo (visible en el chat)
+        </label>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Campos</label>
+        <div id="bfm-fields"></div>
+        <button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="addBotFormFieldRow()">+ Agregar campo</button>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-bot-form')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveBotForm()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-bot-form-submissions">
+  <div class="modal" style="width:700px">
+    <div class="modal-header">
+      <span class="modal-title" id="bfs-modal-title">Respuestas</span>
+      <button class="btn-close" onclick="closeModal('modal-bot-form-submissions')">×</button>
+    </div>
+    <div class="modal-body" style="max-height:70vh;overflow-y:auto">
+      <div id="bot-form-submissions-list">Cargando...</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-bot-form-submissions')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-knowledge-table">
+  <div class="modal" style="width:520px">
+    <div class="modal-header">
+      <span class="modal-title">Nueva base de conocimiento</span>
+      <button class="btn-close" onclick="closeModal('modal-knowledge-table')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Nombre</label>
+        <input class="form-input" id="ktm-name" placeholder="Ej: Empleados" maxlength="200">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Descripción (opcional)</label>
+        <input class="form-input" id="ktm-description" placeholder="Ej: Directorio interno con área y contacto" maxlength="2000">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Columnas</label>
+        <div id="ktm-fields"></div>
+        <button type="button" class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="addKnowledgeFieldRow()">+ Agregar columna</button>
+      </div>
+      <p class="form-hint">Las columnas se pueden agregar después, pero no borrar ni renombrar.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-knowledge-table')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveKnowledgeTable()">Crear</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-knowledge-rows">
+  <div class="modal" style="width:800px">
+    <div class="modal-header">
+      <span class="modal-title" id="ktr-modal-title">Filas</span>
+      <button class="btn-close" onclick="closeModal('modal-knowledge-rows')">×</button>
+    </div>
+    <div class="modal-body" style="max-height:65vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <button class="btn btn-secondary btn-sm" onclick="toggleAddKnowledgeField()">+ Agregar columna</button>
+        <button class="btn btn-primary btn-sm" onclick="openKnowledgeRowEditor()">+ Nueva fila</button>
+      </div>
+      <div id="ktr-add-field-box" style="display:none;gap:8px;align-items:center;margin-bottom:14px;padding:10px;background:var(--bg2,#f8f8fc);border-radius:8px">
+        <input class="form-input" id="ktr-new-field-label" placeholder="Nombre de la columna" style="flex:1" maxlength="200">
+        <select class="form-select" id="ktr-new-field-type" style="width:120px">
+          <option value="text">Texto</option>
+          <option value="number">Número</option>
+          <option value="email">Email</option>
+          <option value="date">Fecha</option>
+        </select>
+        <button class="btn btn-primary btn-sm" onclick="submitAddKnowledgeField()">Agregar</button>
+      </div>
+      <div id="knowledge-rows-table-wrap">Cargando...</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-knowledge-rows')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-knowledge-row">
+  <div class="modal" style="width:460px">
+    <div class="modal-header">
+      <span class="modal-title" id="kr-modal-title">Nueva fila</span>
+      <button class="btn-close" onclick="closeModal('modal-knowledge-row')">×</button>
+    </div>
+    <div class="modal-body">
+      <div id="kr-fields"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-knowledge-row')">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveKnowledgeRow()">Guardar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-conversation">
   <div class="modal" style="width:620px">
     <div class="modal-header">
@@ -1451,6 +1635,8 @@ async function openBotDetail(botId) {
   loadBotStats(botId);
   loadBotContactRequests(botId);
   loadBotFiles(botId);
+  loadBotForms(botId);
+  loadBotKnowledgeTables(botId);
   if (canEmbed) updateEmbedCodes(botId);
   if (canManage) {
     loadApiKeys(botId);
@@ -1632,6 +1818,385 @@ async function deleteBotFile(botId, fileId) {
     await api(`/api/v1/chatbots/${botId}/files/${fileId}`, 'DELETE');
     toast('Archivo eliminado', 'success');
     loadBotFiles(botId);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BOT FORMS — formularios que arma el admin para pedirle datos al usuario final
+// ═══════════════════════════════════════════════════════════════
+let BOT_FORMS = [];
+let editingBotFormId = null;
+let bfmFieldSeq = 0;
+
+function botFormRowHtml(f) {
+  const badge = f.is_active ? '<span class="badge badge-green">Activo</span>' : '<span class="badge badge-yellow">Inactivo</span>';
+  return `
+    <tr>
+      <td class="td-main">${escapeHtml(f.title)}</td>
+      <td class="text-sm">${f.fields.length}</td>
+      <td>${badge}</td>
+      <td><button class="btn btn-secondary btn-sm" onclick="openBotFormSubmissions('${f.id}')">📬 Ver respuestas</button></td>
+      <td style="display:flex;gap:6px">
+        <button class="btn btn-secondary btn-sm" onclick="openBotFormBuilder('${f.id}')" title="Editar">✏️</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteBotForm('${f.id}')" title="Eliminar">🗑</button>
+      </td>
+    </tr>`;
+}
+
+async function loadBotForms(botId) {
+  const tbody = document.getElementById('bot-forms-table');
+  try {
+    BOT_FORMS = await api(`/api/v1/chatbots/${botId}/forms/`);
+    tbody.innerHTML = BOT_FORMS.length ? BOT_FORMS.map(botFormRowHtml).join('')
+      : '<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:24px">Sin formularios todavía</td></tr>';
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--danger);padding:24px">${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+function addBotFormFieldRow(field) {
+  const id = `bff-${bfmFieldSeq++}`;
+  const row = document.createElement('div');
+  row.id = id;
+  row.className = 'bff-row';
+  row.style.cssText = 'display:flex;gap:8px;align-items:flex-start;margin-bottom:8px;padding:10px;background:var(--bg2,#f8f8fc);border-radius:8px';
+  row.innerHTML = `
+    <div style="flex:1;display:flex;flex-direction:column;gap:6px;min-width:0">
+      <input class="form-input bff-label" placeholder="Etiqueta (ej: DNI)" maxlength="200" value="${escapeHtml(field?.label || '')}">
+      <input class="form-input bff-help" placeholder="Ayuda para el usuario (opcional)" maxlength="300" value="${escapeHtml(field?.help_text || '')}">
+    </div>
+    <select class="form-select bff-type" style="width:110px">
+      <option value="text">Texto</option>
+      <option value="number">Número</option>
+      <option value="email">Email</option>
+      <option value="file">Archivo</option>
+    </select>
+    <label style="display:flex;align-items:center;gap:4px;font-size:12px;white-space:nowrap;padding-top:9px;cursor:pointer">
+      <input type="checkbox" class="bff-required" ${field?.required !== false ? 'checked' : ''}> Obligatorio
+    </label>
+    <div style="display:flex;flex-direction:column;gap:2px">
+      <button type="button" class="btn btn-secondary btn-sm" onclick="moveBotFormFieldRow('${id}',-1)" title="Subir">↑</button>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="moveBotFormFieldRow('${id}',1)" title="Bajar">↓</button>
+    </div>
+    <button type="button" class="btn btn-danger btn-sm" onclick="document.getElementById('${id}').remove()" title="Quitar campo">🗑</button>
+  `;
+  row.querySelector('.bff-type').value = field?.field_type || 'text';
+  document.getElementById('bfm-fields').appendChild(row);
+}
+
+function moveBotFormFieldRow(id, dir) {
+  const row = document.getElementById(id);
+  if (dir < 0 && row.previousElementSibling) row.parentElement.insertBefore(row, row.previousElementSibling);
+  else if (dir > 0 && row.nextElementSibling) row.parentElement.insertBefore(row.nextElementSibling, row);
+}
+
+function openBotFormBuilder(formId) {
+  const form = formId ? BOT_FORMS.find(f => f.id === formId) : null;
+  editingBotFormId = form?.id || null;
+  document.getElementById('bf-modal-title').textContent = form ? 'Editar formulario' : 'Nuevo formulario';
+  document.getElementById('bfm-title').value = form?.title || '';
+  document.getElementById('bfm-description').value = form?.description || '';
+  document.getElementById('bfm-success').value = form?.success_message || '';
+  document.getElementById('bfm-active').checked = form ? form.is_active : true;
+  document.getElementById('bfm-fields').innerHTML = '';
+  if (form?.fields?.length) form.fields.forEach(addBotFormFieldRow);
+  else addBotFormFieldRow();
+  document.getElementById('modal-bot-form').classList.add('open');
+}
+
+async function saveBotForm() {
+  const title = document.getElementById('bfm-title').value.trim();
+  if (!title) { toast('Poné un título', 'error'); return; }
+  const fields = [...document.querySelectorAll('#bfm-fields .bff-row')].map(row => ({
+    label: row.querySelector('.bff-label').value.trim(),
+    field_type: row.querySelector('.bff-type').value,
+    required: row.querySelector('.bff-required').checked,
+    help_text: row.querySelector('.bff-help').value.trim() || null,
+  })).filter(f => f.label);
+  if (!fields.length) { toast('Agregá al menos un campo con etiqueta', 'error'); return; }
+  const payload = {
+    title,
+    description: document.getElementById('bfm-description').value.trim() || null,
+    success_message: document.getElementById('bfm-success').value.trim() || null,
+    is_active: document.getElementById('bfm-active').checked,
+    fields,
+  };
+  try {
+    if (editingBotFormId) await api(`/api/v1/chatbots/${currentBotId}/forms/${editingBotFormId}`, 'PATCH', payload);
+    else await api(`/api/v1/chatbots/${currentBotId}/forms/`, 'POST', payload);
+    closeModal('modal-bot-form');
+    toast('Formulario guardado', 'success');
+    loadBotForms(currentBotId);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteBotForm(formId) {
+  if (!confirm('¿Eliminar este formulario? También se borran sus respuestas y los archivos adjuntos.')) return;
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}/forms/${formId}`, 'DELETE');
+    toast('Formulario eliminado', 'success');
+    loadBotForms(currentBotId);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function botFormSubmissionHtml(s, formId) {
+  const form = BOT_FORMS.find(f => f.id === formId);
+  const labelFor = key => form?.fields.find(fl => fl.key === key)?.label || key;
+  const dataRows = Object.entries(s.data || {})
+    .map(([k, v]) => `<div><b>${escapeHtml(labelFor(k))}:</b> ${escapeHtml(v)}</div>`).join('');
+  const filesHtml = s.files.map(fl =>
+    `<a href="#" onclick="downloadAuthFile('${fl.url}','${escapeHtml(fl.original_filename).replace(/'/g, "&#39;")}');return false">📎 ${escapeHtml(fl.original_filename)} (${formatBytes(fl.file_size)})</a>`
+  ).join('<br>');
+  const statusBadge = s.status === 'resolved'
+    ? '<span class="badge badge-green">Resuelta</span>' : '<span class="badge badge-yellow">Pendiente</span>';
+  const resolvedInfo = (s.status === 'resolved' && s.resolved_at)
+    ? ` · por ${escapeHtml(s.resolved_by_username || '—')} (${new Date(s.resolved_at).toLocaleString('es')})` : '';
+  const action = s.status === 'resolved'
+    ? `<button class="btn btn-secondary btn-sm" onclick="setBotFormSubmissionStatus('${formId}','${s.id}','pending')">Reabrir</button>`
+    : `<button class="btn btn-primary btn-sm" onclick="setBotFormSubmissionStatus('${formId}','${s.id}','resolved')">Marcar resuelta</button>`;
+  return `
+    <div style="border:1px solid var(--border,#e5e5ef);border-radius:8px;padding:14px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+        <div style="font-size:13px;line-height:1.7">${dataRows || '<span style="color:var(--text3)">Sin datos de texto</span>'}</div>
+        ${statusBadge}
+      </div>
+      ${filesHtml ? `<div style="margin-top:8px;font-size:13px">${filesHtml}</div>` : ''}
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:10px">
+        <div class="text-sm" style="color:var(--text3)">${new Date(s.created_at).toLocaleString('es')}${resolvedInfo}</div>
+        ${action}
+      </div>
+    </div>`;
+}
+
+async function openBotFormSubmissions(formId) {
+  const form = BOT_FORMS.find(f => f.id === formId);
+  document.getElementById('bfs-modal-title').textContent = form ? `Respuestas — ${form.title}` : 'Respuestas';
+  const box = document.getElementById('bot-form-submissions-list');
+  box.innerHTML = 'Cargando...';
+  document.getElementById('modal-bot-form-submissions').classList.add('open');
+  try {
+    const subs = await api(`/api/v1/chatbots/${currentBotId}/forms/${formId}/submissions`);
+    box.innerHTML = subs.length ? subs.map(s => botFormSubmissionHtml(s, formId)).join('')
+      : '<p style="color:var(--text3);text-align:center;padding:20px">Sin respuestas todavía</p>';
+  } catch(e) {
+    box.innerHTML = `<p style="color:var(--danger)">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function setBotFormSubmissionStatus(formId, subId, status) {
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}/forms/${formId}/submissions/${subId}`, 'PATCH', { status });
+    openBotFormSubmissions(formId);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function downloadAuthFile(relativeUrl, filename) {
+  try {
+    const res = await fetch(`${API_URL}${relativeUrl}`, { headers: token ? { 'Authorization': `Bearer ${token}` } : {} });
+    if (!res.ok) throw new Error('No se pudo descargar el archivo');
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename || 'archivo';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// KNOWLEDGE TABLES — base de conocimiento estructurada que arma el admin
+// ═══════════════════════════════════════════════════════════════
+let KNOWLEDGE_TABLES = [];
+let ktmFieldSeq = 0;
+let currentKnowledgeTableId = null;
+let currentKnowledgeRows = [];
+let editingKnowledgeRowId = null;
+
+function knowledgeTableRowHtml(t) {
+  return `
+    <tr>
+      <td class="td-main">${escapeHtml(t.name)}</td>
+      <td class="text-sm">${t.fields.length}</td>
+      <td class="text-sm">${t.row_count}</td>
+      <td style="display:flex;gap:6px">
+        <button class="btn btn-secondary btn-sm" onclick="openKnowledgeTableRows('${t.id}')">📑 Ver filas</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteKnowledgeTable('${t.id}')" title="Eliminar">🗑</button>
+      </td>
+    </tr>`;
+}
+
+async function loadBotKnowledgeTables(botId) {
+  const tbody = document.getElementById('bot-knowledge-table');
+  try {
+    KNOWLEDGE_TABLES = await api(`/api/v1/chatbots/${botId}/knowledge-tables/`);
+    tbody.innerHTML = KNOWLEDGE_TABLES.length ? KNOWLEDGE_TABLES.map(knowledgeTableRowHtml).join('')
+      : '<tr><td colspan="4" style="text-align:center;color:var(--text3);padding:24px">Sin tablas todavía</td></tr>';
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--danger);padding:24px">${escapeHtml(e.message)}</td></tr>`;
+  }
+}
+
+function addKnowledgeFieldRow() {
+  const id = `ktf-${ktmFieldSeq++}`;
+  const row = document.createElement('div');
+  row.id = id;
+  row.style.cssText = 'display:flex;gap:8px;align-items:center;margin-bottom:8px';
+  row.innerHTML = `
+    <input class="form-input ktf-label" placeholder="Nombre de la columna (ej: DNI)" maxlength="200" style="flex:1">
+    <select class="form-select ktf-type" style="width:120px">
+      <option value="text">Texto</option>
+      <option value="number">Número</option>
+      <option value="email">Email</option>
+      <option value="date">Fecha</option>
+    </select>
+    <button type="button" class="btn btn-danger btn-sm" onclick="document.getElementById('${id}').remove()" title="Quitar">🗑</button>
+  `;
+  document.getElementById('ktm-fields').appendChild(row);
+}
+
+function openKnowledgeTableBuilder() {
+  document.getElementById('ktm-name').value = '';
+  document.getElementById('ktm-description').value = '';
+  document.getElementById('ktm-fields').innerHTML = '';
+  addKnowledgeFieldRow();
+  document.getElementById('modal-knowledge-table').classList.add('open');
+}
+
+async function saveKnowledgeTable() {
+  const name = document.getElementById('ktm-name').value.trim();
+  if (!name) { toast('Poné un nombre', 'error'); return; }
+  const fields = [...document.querySelectorAll('#ktm-fields > div')].map(row => ({
+    label: row.querySelector('.ktf-label').value.trim(),
+    field_type: row.querySelector('.ktf-type').value,
+  })).filter(f => f.label);
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}/knowledge-tables/`, 'POST', {
+      name, description: document.getElementById('ktm-description').value.trim() || null, fields,
+    });
+    closeModal('modal-knowledge-table');
+    toast('Base de conocimiento creada', 'success');
+    loadBotKnowledgeTables(currentBotId);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteKnowledgeTable(tableId) {
+  if (!confirm('¿Eliminar esta base de conocimiento? Se borran sus filas y deja de estar disponible para el bot.')) return;
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}/knowledge-tables/${tableId}`, 'DELETE');
+    toast('Eliminada', 'success');
+    loadBotKnowledgeTables(currentBotId);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function toggleAddKnowledgeField() {
+  const box = document.getElementById('ktr-add-field-box');
+  const show = box.style.display === 'none';
+  box.style.display = show ? 'flex' : 'none';
+  if (show) {
+    document.getElementById('ktr-new-field-label').value = '';
+    document.getElementById('ktr-new-field-label').focus();
+  }
+}
+
+async function submitAddKnowledgeField() {
+  const label = document.getElementById('ktr-new-field-label').value.trim();
+  if (!label) { toast('Poné un nombre para la columna', 'error'); return; }
+  const field_type = document.getElementById('ktr-new-field-type').value;
+  try {
+    const table = await api(`/api/v1/chatbots/${currentBotId}/knowledge-tables/${currentKnowledgeTableId}/fields`, 'POST', { label, field_type });
+    const idx = KNOWLEDGE_TABLES.findIndex(t => t.id === currentKnowledgeTableId);
+    if (idx >= 0) KNOWLEDGE_TABLES[idx] = table;
+    toggleAddKnowledgeField();
+    toast('Columna agregada', 'success');
+    renderKnowledgeRowsTable();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function openKnowledgeTableRows(tableId) {
+  currentKnowledgeTableId = tableId;
+  const table = KNOWLEDGE_TABLES.find(t => t.id === tableId);
+  document.getElementById('ktr-modal-title').textContent = table ? `Filas — ${table.name}` : 'Filas';
+  document.getElementById('ktr-add-field-box').style.display = 'none';
+  const wrap = document.getElementById('knowledge-rows-table-wrap');
+  wrap.innerHTML = 'Cargando...';
+  document.getElementById('modal-knowledge-rows').classList.add('open');
+  try {
+    currentKnowledgeRows = await api(`/api/v1/chatbots/${currentBotId}/knowledge-tables/${tableId}/rows`);
+    renderKnowledgeRowsTable();
+  } catch(e) {
+    wrap.innerHTML = `<p style="color:var(--danger)">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderKnowledgeRowsTable() {
+  const table = KNOWLEDGE_TABLES.find(t => t.id === currentKnowledgeTableId);
+  const wrap = document.getElementById('knowledge-rows-table-wrap');
+  if (!table) { wrap.innerHTML = ''; return; }
+  if (!currentKnowledgeRows.length) {
+    wrap.innerHTML = '<p style="color:var(--text3);text-align:center;padding:20px">Sin filas todavía</p>';
+    return;
+  }
+  const head = table.fields.map(f => `<th>${escapeHtml(f.label)}</th>`).join('');
+  const rows = currentKnowledgeRows.map(r => {
+    const cells = table.fields.map(f => `<td class="text-sm">${escapeHtml(r.data[f.key] || '-')}</td>`).join('');
+    return `<tr>${cells}<td style="display:flex;gap:6px">
+      <button class="btn btn-secondary btn-sm" onclick="openKnowledgeRowEditor('${r.id}')">✏️</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteKnowledgeRow('${r.id}')">🗑</button>
+    </td></tr>`;
+  }).join('');
+  wrap.innerHTML = `<table><thead><tr>${head}<th>Acción</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function knowledgeRowFieldInputHtml(field, value) {
+  const id = `kr-f-${field.key}`;
+  const type = field.field_type === 'number' ? 'number' : field.field_type === 'email' ? 'email'
+    : field.field_type === 'date' ? 'date' : 'text';
+  return `<div class="form-group"><label class="form-label">${escapeHtml(field.label)}</label>
+    <input class="form-input" type="${type}" id="${id}" value="${escapeHtml(value || '')}"></div>`;
+}
+
+function openKnowledgeRowEditor(rowId) {
+  const table = KNOWLEDGE_TABLES.find(t => t.id === currentKnowledgeTableId);
+  if (!table) return;
+  editingKnowledgeRowId = rowId || null;
+  const row = rowId ? currentKnowledgeRows.find(r => r.id === rowId) : null;
+  document.getElementById('kr-modal-title').textContent = row ? 'Editar fila' : 'Nueva fila';
+  document.getElementById('kr-fields').innerHTML =
+    table.fields.map(f => knowledgeRowFieldInputHtml(f, row?.data?.[f.key])).join('');
+  document.getElementById('modal-knowledge-row').classList.add('open');
+}
+
+async function saveKnowledgeRow() {
+  const table = KNOWLEDGE_TABLES.find(t => t.id === currentKnowledgeTableId);
+  if (!table) return;
+  const data = {};
+  for (const f of table.fields) {
+    const v = document.getElementById(`kr-f-${f.key}`).value.trim();
+    if (v) data[f.key] = v;
+  }
+  try {
+    if (editingKnowledgeRowId) {
+      await api(`/api/v1/chatbots/${currentBotId}/knowledge-tables/${currentKnowledgeTableId}/rows/${editingKnowledgeRowId}`, 'PATCH', { data });
+    } else {
+      await api(`/api/v1/chatbots/${currentBotId}/knowledge-tables/${currentKnowledgeTableId}/rows`, 'POST', { data });
+    }
+    closeModal('modal-knowledge-row');
+    toast('Fila guardada', 'success');
+    currentKnowledgeRows = await api(`/api/v1/chatbots/${currentBotId}/knowledge-tables/${currentKnowledgeTableId}/rows`);
+    renderKnowledgeRowsTable();
+    loadBotKnowledgeTables(currentBotId);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deleteKnowledgeRow(rowId) {
+  if (!confirm('¿Eliminar esta fila? El bot deja de encontrarla.')) return;
+  try {
+    await api(`/api/v1/chatbots/${currentBotId}/knowledge-tables/${currentKnowledgeTableId}/rows/${rowId}`, 'DELETE');
+    currentKnowledgeRows = currentKnowledgeRows.filter(r => r.id !== rowId);
+    renderKnowledgeRowsTable();
+    loadBotKnowledgeTables(currentBotId);
   } catch(e) { toast(e.message, 'error'); }
 }
 

@@ -15,6 +15,7 @@ import aiofiles
 from datetime import datetime, timezone
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, BackgroundTasks, Request
+from starlette.datastructures import UploadFile as StarletteUploadFile
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from sqlalchemy import select, func, update, delete, text, or_, case
 from sqlalchemy.orm import selectinload
@@ -28,6 +29,8 @@ from app.models.models import (
     User, Chatbot, Document, DocumentChunk, Conversation, Message,
     UserRole, DocumentStatus, APIKey, AIProviderConfig, ChatbotAssignment,
     HumanContactRequest, ContactRequestStatus, BotFile, MessageRole,
+    BotForm, BotFormField, BotFormSubmission, BotFormSubmissionFile, FormFieldType,
+    KnowledgeTable, KnowledgeField, KnowledgeRow, KnowledgeFieldType,
 )
 from app.core.security import (
     hash_password, verify_password,
@@ -37,7 +40,7 @@ from app.core.security import (
 from app.core.config import settings
 from app.core.net import get_client_ip
 from app.core.crypto import encrypt_secret, decrypt_secret, scrub_secrets
-from app.services.bot_keys import BotUnavailable, MSG_UNAVAILABLE, month_usage, current_month
+from app.services.bot_keys import BotUnavailable, MSG_UNAVAILABLE, month_usage, current_month, record_usage
 from app.services.chat_service import ChatService
 from app.services.rag_service import RAGService, DocumentExtractor
 
@@ -545,6 +548,7 @@ async def delete_chatbot(bot_id: str, payload: dict = Depends(require_role("admi
     _delete_bot_image(bot_id, AVATARS_DIR)
     _delete_bot_image(bot_id, ORG_LOGOS_DIR)
     shutil.rmtree(os.path.join(BOT_FILES_DIR, bot_id), ignore_errors=True)
+    shutil.rmtree(os.path.join(FORM_FILES_DIR, bot_id), ignore_errors=True)
     return {"ok": True}
 
 
@@ -611,6 +615,24 @@ AVATARS_DIR = os.path.join("static", "avatars")
 ORG_LOGOS_DIR = os.path.join("static", "org_logos")
 BOT_FILES_DIR = os.path.join("static", "bot_files")  # ruta en disco
 BOT_FILES_URL_PREFIX = "/static/bot_files"  # ruta pública (independiente de dónde se guarde en disco)
+
+# Archivos de formularios del bot (ej. certificado médico): pueden ser sensibles, así que van
+# AFUERA de static/ (nunca públicos) y se sirven solo por el endpoint autenticado de descarga.
+FORM_FILES_DIR = os.path.join(settings.UPLOAD_DIR, "bot_forms")
+FORM_FILE_SIGNATURES = {
+    b"%PDF-": ("application/pdf", ".pdf"),
+    b"\xff\xd8\xff": ("image/jpeg", ".jpg"),
+    b"\x89PNG\r\n\x1a\n": ("image/png", ".png"),
+}
+
+
+def _sniff_form_file(content: bytes) -> Optional[tuple]:
+    """Valida por firma real del archivo, no por el content-type que declara el navegador
+    (mismo criterio que el resto de las subidas). None si no es ninguno de los tipos aceptados."""
+    for sig, info in FORM_FILE_SIGNATURES.items():
+        if content.startswith(sig):
+            return info
+    return None
 
 
 IMAGE_EXTS = ("png", "jpg", "gif", "webp", "svg")
@@ -790,6 +812,7 @@ async def get_widget_script(bot_id: str, request: Request, key: Optional[str] = 
     if not bot or not bot.is_active or not bot.is_public:
         raise HTTPException(404, "Bot no disponible")
     widget_config = bot.widget_config or {}
+    forms_json = await _active_bot_forms_json(bot_id, db)
     # json.dumps escapa comillas, backslashes y </script — evita romper el contexto JS
     # con datos configurados por el admin del bot (bot_name, welcome_message, etc.)
     config_json = json.dumps({
@@ -804,6 +827,7 @@ async def get_widget_script(bot_id: str, request: Request, key: Optional[str] = 
         "contactWhatsapp": bot.contact_whatsapp or None,  # solo dígitos con código de país
         "allowUserUploads": bot.allow_user_uploads,  # permite subir un PDF en el chat
         "chatUploadMaxMb": settings.CHAT_UPLOAD_MAX_SIZE_MB if bot.allow_user_uploads else None,
+        "forms": forms_json,  # formularios activos: el bot le pide estos datos al usuario
         "welcomeMessage": bot.welcome_message,
         "primaryColor": widget_config.get("primary_color", "#6c63ff"),
         "secondaryColor": widget_config.get("secondary_color", "#a78bfa"),
@@ -1055,7 +1079,10 @@ ALLOWED_MIMES = {
 @documents_router.get("/")
 async def list_documents(bot_id: str, payload: dict = Depends(get_current_user_payload), db: AsyncSession = Depends(get_db)):
     await _get_owned_chatbot(bot_id, payload, db)
-    result = await db.execute(select(Document).where(Document.chatbot_id == bot_id).order_by(Document.created_at.desc()))
+    result = await db.execute(
+        select(Document).where(Document.chatbot_id == bot_id, Document.source != "knowledge_table")
+        .order_by(Document.created_at.desc())
+    )
     docs = result.scalars().all()
     return [{"id": d.id, "filename": d.original_filename, "status": d.status.value,
              "chunk_count": d.chunk_count, "page_count": d.page_count,
@@ -1115,6 +1142,8 @@ async def delete_document(bot_id: str, doc_id: str, payload: dict = Depends(requ
     doc = await db.get(Document, doc_id)
     if not doc or doc.chatbot_id != bot_id:
         raise HTTPException(404, "Documento no encontrado")
+    if doc.source == "knowledge_table":
+        raise HTTPException(400, "Este documento pertenece a una base de conocimiento: se borra desde esa pestaña")
     await db.execute(delete(DocumentChunk).where(DocumentChunk.document_id == doc_id))
     if os.path.exists(doc.file_path):
         try:
@@ -1208,6 +1237,638 @@ async def delete_bot_file(bot_id: str, file_id: str, payload: dict = Depends(req
         except OSError as e:
             logger.warning("bot_file_delete_error", path=path, error=str(e))
     await db.delete(bf)
+    await db.commit()
+    return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════
+# BOT FORMS — formularios que arma el admin para pedirle datos al usuario final en el chat
+# ═══════════════════════════════════════════════════════════════
+
+MAX_FORM_FIELDS = 20
+MAX_FORM_FILE_FIELDS = 3
+EMAIL_FIELD_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _slugify_field_key(label: str, taken: set) -> str:
+    """Nombre interno del campo (se usa para guardar la respuesta y en el multipart del envío):
+    ASCII, sin espacios, único dentro del formulario. El admin solo ve/edita el label."""
+    base = re.sub(r"[^a-z0-9]+", "_", (label or "campo").strip().lower()).strip("_") or "campo"
+    key, i = base, 2
+    while key in taken:
+        key = f"{base}_{i}"
+        i += 1
+    taken.add(key)
+    return key
+
+
+class BotFormFieldIn(BaseModel):
+    label: str
+    field_type: FormFieldType
+    required: bool = True
+    help_text: Optional[str] = None
+
+    @field_validator("label")
+    @classmethod
+    def _check_label(cls, v):
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("El campo necesita una etiqueta")
+        if len(v) > 200:
+            raise ValueError("La etiqueta es demasiado larga (máx 200 caracteres)")
+        return v
+
+    @field_validator("help_text")
+    @classmethod
+    def _check_help(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if len(v) > 300:
+            raise ValueError("La ayuda del campo es demasiado larga (máx 300 caracteres)")
+        return v or None
+
+
+class BotFormCreate(BaseModel):
+    """Se usa también para editar (PATCH): reemplaza título + campos completos, igual que
+    suggested_questions — más simple y confiable que mergear campos parciales."""
+    title: str
+    description: Optional[str] = None
+    success_message: Optional[str] = None
+    is_active: bool = True
+    fields: List[BotFormFieldIn] = []
+
+    @field_validator("title")
+    @classmethod
+    def _check_title(cls, v):
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("El título es obligatorio")
+        if len(v) > 200:
+            raise ValueError("El título es demasiado largo (máx 200 caracteres)")
+        return v
+
+    @field_validator("description", "success_message")
+    @classmethod
+    def _check_text(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if len(v) > 2000:
+            raise ValueError("El texto es demasiado largo (máx 2000 caracteres)")
+        return v or None
+
+    @field_validator("fields")
+    @classmethod
+    def _check_fields(cls, v):
+        if len(v) > MAX_FORM_FIELDS:
+            raise ValueError(f"Máximo {MAX_FORM_FIELDS} campos por formulario")
+        if sum(1 for f in v if f.field_type == FormFieldType.file) > MAX_FORM_FILE_FIELDS:
+            raise ValueError(f"Máximo {MAX_FORM_FILE_FIELDS} campos de archivo por formulario")
+        return v
+
+
+async def _active_bot_forms_json(bot_id: str, db: AsyncSession) -> list:
+    """Formularios activos de un bot, listos para mandarle al widget/página de chat: solo lo que
+    necesita el usuario final (sin created_at ni demás metadata de administración)."""
+    result = await db.execute(
+        select(BotForm).where(BotForm.chatbot_id == bot_id, BotForm.is_active == True)
+        .options(selectinload(BotForm.fields)).order_by(BotForm.created_at)
+    )
+    return [{
+        "id": f.id, "title": f.title, "description": f.description,
+        "fields": [
+            {"key": fl.key, "label": fl.label, "field_type": fl.field_type.value,
+             "required": fl.required, "help_text": fl.help_text}
+            for fl in sorted(f.fields, key=lambda x: x.order)
+        ],
+    } for f in result.scalars().all()]
+
+
+def _serialize_bot_form(f: "BotForm") -> dict:
+    return {
+        "id": f.id, "chatbot_id": f.chatbot_id, "title": f.title,
+        "description": f.description, "success_message": f.success_message,
+        "is_active": f.is_active, "created_at": f.created_at.isoformat(),
+        "fields": [
+            {"key": fl.key, "label": fl.label, "field_type": fl.field_type.value,
+             "required": fl.required, "help_text": fl.help_text}
+            for fl in sorted(f.fields, key=lambda x: x.order)
+        ],
+    }
+
+
+def _apply_bot_form(form: "BotForm", data: BotFormCreate, created_by: Optional[str] = None) -> None:
+    form.title = data.title
+    form.description = data.description
+    form.success_message = data.success_message
+    form.is_active = data.is_active
+    if created_by is not None:
+        form.created_by = created_by
+    taken: set = set()
+    form.fields = [
+        BotFormField(key=_slugify_field_key(fl.label, taken), label=fl.label, field_type=fl.field_type,
+                     required=fl.required, help_text=fl.help_text, order=i)
+        for i, fl in enumerate(data.fields)
+    ]
+
+
+bot_forms_router = APIRouter(prefix="/chatbots/{bot_id}/forms", tags=["bot-forms"])
+
+
+@bot_forms_router.get("/")
+async def list_bot_forms(bot_id: str, payload: dict = Depends(require_role("viewer")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    result = await db.execute(
+        select(BotForm).where(BotForm.chatbot_id == bot_id)
+        .options(selectinload(BotForm.fields)).order_by(BotForm.created_at.desc())
+    )
+    return [_serialize_bot_form(f) for f in result.scalars().all()]
+
+
+@bot_forms_router.post("/", status_code=201)
+async def create_bot_form(bot_id: str, data: BotFormCreate, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    form = BotForm(chatbot_id=bot_id)
+    _apply_bot_form(form, data, created_by=payload["sub"])
+    db.add(form)
+    await db.commit()
+    await db.refresh(form, attribute_names=["fields"])
+    logger.info("bot_form_created", bot_id=bot_id, form_id=form.id, fields=len(form.fields))
+    return _serialize_bot_form(form)
+
+
+@bot_forms_router.patch("/{form_id}")
+async def update_bot_form(bot_id: str, form_id: str, data: BotFormCreate, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    form = await db.get(BotForm, form_id, options=[selectinload(BotForm.fields)])
+    if not form or form.chatbot_id != bot_id:
+        raise HTTPException(404, "Formulario no encontrado")
+    _apply_bot_form(form, data)
+    await db.commit()
+    await db.refresh(form, attribute_names=["fields"])
+    logger.info("bot_form_updated", bot_id=bot_id, form_id=form_id, fields=len(form.fields))
+    return _serialize_bot_form(form)
+
+
+@bot_forms_router.delete("/{form_id}")
+async def delete_bot_form(bot_id: str, form_id: str, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    form = await db.get(BotForm, form_id)
+    if not form or form.chatbot_id != bot_id:
+        raise HTTPException(404, "Formulario no encontrado")
+    sub_ids = (await db.execute(select(BotFormSubmission.id).where(BotFormSubmission.form_id == form_id))).scalars().all()
+    for sid in sub_ids:
+        shutil.rmtree(os.path.join(FORM_FILES_DIR, bot_id, sid), ignore_errors=True)
+    await db.delete(form)
+    await db.commit()
+    return {"ok": True}
+
+
+def _serialize_form_submission(s: "BotFormSubmission", bot_id: str, include_form_title: bool = False) -> dict:
+    out = {
+        "id": s.id, "form_id": s.form_id, "conversation_id": s.conversation_id,
+        "data": s.data, "status": s.status.value,
+        "files": [{
+            "id": fl.id, "field_key": fl.field_key, "original_filename": fl.original_filename,
+            "file_size": fl.file_size,
+            "url": f"/api/v1/chatbots/{bot_id}/forms/{s.form_id}/submissions/{s.id}/files/{fl.id}",
+        } for fl in s.files],
+        "created_at": s.created_at.isoformat(),
+        "resolved_at": s.resolved_at.isoformat() if s.resolved_at else None,
+        "resolved_by": s.resolved_by,
+        "resolved_by_username": s.resolver.username if s.resolver else None,
+    }
+    if include_form_title:
+        out["form_title"] = s.form.title if s.form else None
+    return out
+
+
+@bot_forms_router.get("/{form_id}/submissions")
+async def list_form_submissions(bot_id: str, form_id: str, payload: dict = Depends(require_role("viewer")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    form = await db.get(BotForm, form_id)
+    if not form or form.chatbot_id != bot_id:
+        raise HTTPException(404, "Formulario no encontrado")
+    result = await db.execute(
+        select(BotFormSubmission).where(BotFormSubmission.form_id == form_id)
+        .options(selectinload(BotFormSubmission.files), selectinload(BotFormSubmission.resolver))
+        .order_by(BotFormSubmission.created_at.desc())
+    )
+    return [_serialize_form_submission(s, bot_id) for s in result.scalars().all()]
+
+
+class BotFormSubmissionUpdate(BaseModel):
+    status: ContactRequestStatus
+
+
+@bot_forms_router.patch("/{form_id}/submissions/{submission_id}")
+async def update_form_submission(
+    bot_id: str, form_id: str, submission_id: str, data: BotFormSubmissionUpdate,
+    payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db),
+):
+    await _get_owned_chatbot(bot_id, payload, db)
+    sub = await db.get(BotFormSubmission, submission_id)
+    if not sub or sub.chatbot_id != bot_id or sub.form_id != form_id:
+        raise HTTPException(404, "Respuesta no encontrada")
+    sub.status = data.status
+    if data.status == ContactRequestStatus.resolved:
+        sub.resolved_by = payload["sub"]
+        sub.resolved_at = datetime.now(timezone.utc)
+    else:
+        sub.resolved_by = None
+        sub.resolved_at = None
+    await db.commit()
+    return {"ok": True}
+
+
+@bot_forms_router.get("/{form_id}/submissions/{submission_id}/files/{file_id}")
+async def download_form_submission_file(
+    bot_id: str, form_id: str, submission_id: str, file_id: str,
+    payload: dict = Depends(require_role("viewer")), db: AsyncSession = Depends(get_db),
+):
+    await _get_owned_chatbot(bot_id, payload, db)
+    sub = await db.get(BotFormSubmission, submission_id)
+    if not sub or sub.chatbot_id != bot_id or sub.form_id != form_id:
+        raise HTTPException(404, "Archivo no encontrado")
+    bf = await db.get(BotFormSubmissionFile, file_id)
+    if not bf or bf.submission_id != submission_id:
+        raise HTTPException(404, "Archivo no encontrado")
+    path = os.path.join(FORM_FILES_DIR, bot_id, submission_id, bf.filename)
+    if not os.path.exists(path):
+        raise HTTPException(404, "El archivo ya no está disponible")
+    return FileResponse(path, filename=bf.original_filename, media_type=bf.mime_type or "application/octet-stream")
+
+
+admin_bot_forms_router = APIRouter(prefix="/admin/form-submissions", tags=["bot-forms"])
+
+
+@admin_bot_forms_router.get("/")
+async def list_all_form_submissions(
+    status: Optional[ContactRequestStatus] = None,
+    payload: dict = Depends(require_role("superadmin")), db: AsyncSession = Depends(get_db),
+):
+    """Vista global para superadmin: respuestas de formularios de TODOS los bots."""
+    query = (
+        select(BotFormSubmission)
+        .options(selectinload(BotFormSubmission.files), selectinload(BotFormSubmission.resolver),
+                 selectinload(BotFormSubmission.form), selectinload(BotFormSubmission.chatbot))
+        .order_by(BotFormSubmission.created_at.desc())
+    )
+    if status:
+        query = query.where(BotFormSubmission.status == status)
+    result = await db.execute(query)
+    out = []
+    for s in result.scalars().all():
+        row = _serialize_form_submission(s, s.chatbot_id, include_form_title=True)
+        row["chatbot_name"] = s.chatbot.name if s.chatbot else None
+        out.append(row)
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════
+# KNOWLEDGE TABLES — base de conocimiento estructurada que arma el admin: columnas a elección,
+# el bot la consulta para responder (se indexa como chunks más, junto con los documentos).
+# ═══════════════════════════════════════════════════════════════
+
+MAX_KNOWLEDGE_FIELDS = 20
+KNOWLEDGE_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _slugify_knowledge_key(label: str, taken: set) -> str:
+    base = re.sub(r"[^a-z0-9]+", "_", (label or "campo").strip().lower()).strip("_") or "campo"
+    key, i = base, 2
+    while key in taken:
+        key = f"{base}_{i}"
+        i += 1
+    taken.add(key)
+    return key
+
+
+def _validate_knowledge_value(field: "KnowledgeField", raw) -> str:
+    """Valor limpio como string, o levanta ValueError con el mensaje para el admin. Vacío/None
+    es válido (una fila puede tener celdas sin completar)."""
+    value = "" if raw is None else str(raw).strip()
+    if not value:
+        return ""
+    if len(value) > 500:
+        raise ValueError(f"{field.label}: texto demasiado largo (máx 500 caracteres)")
+    if field.field_type == KnowledgeFieldType.number:
+        try:
+            float(value.replace(",", "."))
+        except ValueError:
+            raise ValueError(f"{field.label}: tiene que ser un número")
+    elif field.field_type == KnowledgeFieldType.email:
+        if not KNOWLEDGE_EMAIL_RE.match(value):
+            raise ValueError(f"{field.label}: el email no es válido")
+    elif field.field_type == KnowledgeFieldType.date:
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"{field.label}: la fecha tiene que tener formato AAAA-MM-DD")
+    return value
+
+
+def _knowledge_row_text(table: "KnowledgeTable", data: dict) -> str:
+    """Texto que representa la fila para la búsqueda del bot: nombre de la tabla + 'Etiqueta:
+    valor' por cada campo cargado. Mismo criterio legible que usaría un humano leyendo la fila."""
+    lines = [table.name] if table.name else []
+    for f in sorted(table.fields, key=lambda x: x.order):
+        v = (data or {}).get(f.key)
+        if v:
+            lines.append(f"{f.label}: {v}")
+    return "\n".join(lines)
+
+
+async def _sync_knowledge_row_chunk(db: AsyncSession, table: "KnowledgeTable", row: "KnowledgeRow") -> None:
+    """Reembebe el texto de la fila y actualiza (o crea) el DocumentChunk que la representa.
+    Misma key del bot y mismo registro de costo que la ingesta de documentos — reusa
+    RAGService._embedder_for y record_usage, no un camino de embeddings aparte."""
+    text_content = _knowledge_row_text(table, row.data)
+    rag = RAGService(db)
+    embedder = await rag._embedder_for(table.chatbot_id)
+    vectors = await embedder.embed_texts([text_content])
+    await record_usage(db, table.chatbot_id, embedding=embedder.tokens_used, cost_usd=embedder.cost_usd or 0.0)
+
+    chunk = await db.get(DocumentChunk, row.chunk_id) if row.chunk_id else None
+    if chunk:
+        chunk.content = text_content
+        chunk.embedding = vectors[0]
+    else:
+        chunk = DocumentChunk(
+            document_id=table.document_id, chatbot_id=table.chatbot_id,
+            content=text_content, chunk_index=0, embedding=vectors[0],
+        )
+        db.add(chunk)
+        await db.flush()
+        row.chunk_id = chunk.id
+
+
+class KnowledgeFieldIn(BaseModel):
+    label: str
+    field_type: KnowledgeFieldType
+
+    @field_validator("label")
+    @classmethod
+    def _check_label(cls, v):
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("El campo necesita una etiqueta")
+        if len(v) > 200:
+            raise ValueError("La etiqueta es demasiado larga (máx 200 caracteres)")
+        return v
+
+
+class KnowledgeTableCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    fields: List[KnowledgeFieldIn] = []
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, v):
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("El nombre es obligatorio")
+        if len(v) > 200:
+            raise ValueError("El nombre es demasiado largo (máx 200 caracteres)")
+        return v
+
+    @field_validator("description")
+    @classmethod
+    def _check_description(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if len(v) > 2000:
+            raise ValueError("La descripción es demasiado larga (máx 2000 caracteres)")
+        return v or None
+
+    @field_validator("fields")
+    @classmethod
+    def _check_fields(cls, v):
+        if len(v) > MAX_KNOWLEDGE_FIELDS:
+            raise ValueError(f"Máximo {MAX_KNOWLEDGE_FIELDS} campos por tabla")
+        return v
+
+
+class KnowledgeTableUpdate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, v):
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("El nombre es obligatorio")
+        if len(v) > 200:
+            raise ValueError("El nombre es demasiado largo (máx 200 caracteres)")
+        return v
+
+    @field_validator("description")
+    @classmethod
+    def _check_description(cls, v):
+        if v is None:
+            return v
+        v = v.strip()
+        if len(v) > 2000:
+            raise ValueError("La descripción es demasiado larga (máx 2000 caracteres)")
+        return v or None
+
+
+class KnowledgeRowIn(BaseModel):
+    data: dict = {}
+
+
+def _serialize_knowledge_table(t: "KnowledgeTable", row_count: int = None) -> dict:
+    out = {
+        "id": t.id, "chatbot_id": t.chatbot_id, "name": t.name, "description": t.description,
+        "created_at": t.created_at.isoformat(),
+        "fields": [
+            {"key": f.key, "label": f.label, "field_type": f.field_type.value}
+            for f in sorted(t.fields, key=lambda x: x.order)
+        ],
+    }
+    if row_count is not None:
+        out["row_count"] = row_count
+    return out
+
+
+def _serialize_knowledge_row(r: "KnowledgeRow", indexed_text: Optional[str] = None) -> dict:
+    return {
+        "id": r.id, "table_id": r.table_id, "data": r.data,
+        "indexed_text": indexed_text,
+        "created_at": r.created_at.isoformat(),
+        "updated_at": r.updated_at.isoformat(),
+    }
+
+
+knowledge_router = APIRouter(prefix="/chatbots/{bot_id}/knowledge-tables", tags=["knowledge"])
+
+
+@knowledge_router.get("/")
+async def list_knowledge_tables(bot_id: str, payload: dict = Depends(require_role("viewer")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    result = await db.execute(
+        select(KnowledgeTable).where(KnowledgeTable.chatbot_id == bot_id)
+        .options(selectinload(KnowledgeTable.fields)).order_by(KnowledgeTable.created_at.desc())
+    )
+    tables = result.scalars().all()
+    counts = dict((await db.execute(
+        select(KnowledgeRow.table_id, func.count(KnowledgeRow.id))
+        .where(KnowledgeRow.table_id.in_([t.id for t in tables])).group_by(KnowledgeRow.table_id)
+    )).all()) if tables else {}
+    return [_serialize_knowledge_table(t, counts.get(t.id, 0)) for t in tables]
+
+
+@knowledge_router.post("/", status_code=201)
+async def create_knowledge_table(bot_id: str, data: KnowledgeTableCreate, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    bot = await _get_owned_chatbot(bot_id, payload, db)
+    # Document "virtual": agrupa los chunks de esta tabla, sin archivo real en disco.
+    doc = Document(
+        chatbot_id=bot_id, filename=f"kb_{uuid.uuid4()}", original_filename=f"Base de conocimiento: {data.name}",
+        file_path="", file_size=0, mime_type="text/plain", status=DocumentStatus.ready,
+        source="knowledge_table", uploaded_by=payload["sub"],
+    )
+    db.add(doc)
+    await db.flush()
+
+    table = KnowledgeTable(chatbot_id=bot_id, document_id=doc.id, name=data.name,
+                           description=data.description, created_by=payload["sub"])
+    taken: set = set()
+    table.fields = [
+        KnowledgeField(key=_slugify_knowledge_key(fl.label, taken), label=fl.label, field_type=fl.field_type, order=i)
+        for i, fl in enumerate(data.fields)
+    ]
+    db.add(table)
+    await db.commit()
+    await db.refresh(table, attribute_names=["fields"])
+    logger.info("knowledge_table_created", bot_id=bot_id, table_id=table.id, fields=len(table.fields))
+    return _serialize_knowledge_table(table, 0)
+
+
+@knowledge_router.patch("/{table_id}")
+async def update_knowledge_table(bot_id: str, table_id: str, data: KnowledgeTableUpdate, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    table = await db.get(KnowledgeTable, table_id, options=[selectinload(KnowledgeTable.fields)])
+    if not table or table.chatbot_id != bot_id:
+        raise HTTPException(404, "Base de conocimiento no encontrada")
+    table.name = data.name
+    table.description = data.description
+    await db.commit()
+    return _serialize_knowledge_table(table)
+
+
+@knowledge_router.post("/{table_id}/fields", status_code=201)
+async def add_knowledge_field(bot_id: str, table_id: str, data: KnowledgeFieldIn, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    """Solo agrega: no hay edición ni borrado de campos (ver KnowledgeField en models.py)."""
+    await _get_owned_chatbot(bot_id, payload, db)
+    table = await db.get(KnowledgeTable, table_id, options=[selectinload(KnowledgeTable.fields)])
+    if not table or table.chatbot_id != bot_id:
+        raise HTTPException(404, "Base de conocimiento no encontrada")
+    if len(table.fields) >= MAX_KNOWLEDGE_FIELDS:
+        raise HTTPException(400, f"Máximo {MAX_KNOWLEDGE_FIELDS} campos por tabla")
+    taken = {f.key for f in table.fields}
+    field = KnowledgeField(table_id=table_id, key=_slugify_knowledge_key(data.label, taken),
+                           label=data.label, field_type=data.field_type, order=len(table.fields))
+    db.add(field)
+    await db.commit()
+    await db.refresh(table, attribute_names=["fields"])
+    return _serialize_knowledge_table(table)
+
+
+@knowledge_router.delete("/{table_id}")
+async def delete_knowledge_table(bot_id: str, table_id: str, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    table = await db.get(KnowledgeTable, table_id)
+    if not table or table.chatbot_id != bot_id:
+        raise HTTPException(404, "Base de conocimiento no encontrada")
+    doc = await db.get(Document, table.document_id)
+    await db.delete(table)  # cascade: fields y rows
+    if doc:
+        await db.delete(doc)  # cascade: sus document_chunks (las filas indexadas)
+    await db.commit()
+    return {"ok": True}
+
+
+@knowledge_router.get("/{table_id}/rows")
+async def list_knowledge_rows(bot_id: str, table_id: str, payload: dict = Depends(require_role("viewer")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    table = await db.get(KnowledgeTable, table_id)
+    if not table or table.chatbot_id != bot_id:
+        raise HTTPException(404, "Base de conocimiento no encontrada")
+    result = await db.execute(select(KnowledgeRow).where(KnowledgeRow.table_id == table_id).order_by(KnowledgeRow.created_at))
+    rows = result.scalars().all()
+    chunk_ids = [r.chunk_id for r in rows if r.chunk_id]
+    texts = {}
+    if chunk_ids:
+        texts = dict((await db.execute(select(DocumentChunk.id, DocumentChunk.content).where(DocumentChunk.id.in_(chunk_ids)))).all())
+    return [_serialize_knowledge_row(r, texts.get(r.chunk_id)) for r in rows]
+
+
+@knowledge_router.post("/{table_id}/rows", status_code=201)
+async def create_knowledge_row(bot_id: str, table_id: str, data: KnowledgeRowIn, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    table = await db.get(KnowledgeTable, table_id, options=[selectinload(KnowledgeTable.fields)])
+    if not table or table.chatbot_id != bot_id:
+        raise HTTPException(404, "Base de conocimiento no encontrada")
+    clean = {}
+    try:
+        for f in table.fields:
+            v = _validate_knowledge_value(f, (data.data or {}).get(f.key))
+            if v:
+                clean[f.key] = v
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    row = KnowledgeRow(table_id=table_id, data=clean, created_by=payload["sub"])
+    db.add(row)
+    await db.flush()
+    await _sync_knowledge_row_chunk(db, table, row)
+    await db.commit()
+    await db.refresh(row)
+    logger.info("knowledge_row_created", bot_id=bot_id, table_id=table_id, row_id=row.id)
+    return _serialize_knowledge_row(row, _knowledge_row_text(table, row.data))
+
+
+@knowledge_router.patch("/{table_id}/rows/{row_id}")
+async def update_knowledge_row(bot_id: str, table_id: str, row_id: str, data: KnowledgeRowIn, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    table = await db.get(KnowledgeTable, table_id, options=[selectinload(KnowledgeTable.fields)])
+    if not table or table.chatbot_id != bot_id:
+        raise HTTPException(404, "Base de conocimiento no encontrada")
+    row = await db.get(KnowledgeRow, row_id)
+    if not row or row.table_id != table_id:
+        raise HTTPException(404, "Fila no encontrada")
+    clean = {}
+    try:
+        for f in table.fields:
+            v = _validate_knowledge_value(f, (data.data or {}).get(f.key))
+            if v:
+                clean[f.key] = v
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    row.data = clean
+    await _sync_knowledge_row_chunk(db, table, row)
+    await db.commit()
+    await db.refresh(row)
+    return _serialize_knowledge_row(row, _knowledge_row_text(table, row.data))
+
+
+@knowledge_router.delete("/{table_id}/rows/{row_id}")
+async def delete_knowledge_row(bot_id: str, table_id: str, row_id: str, payload: dict = Depends(require_role("operator")), db: AsyncSession = Depends(get_db)):
+    await _get_owned_chatbot(bot_id, payload, db)
+    table = await db.get(KnowledgeTable, table_id)
+    if not table or table.chatbot_id != bot_id:
+        raise HTTPException(404, "Base de conocimiento no encontrada")
+    row = await db.get(KnowledgeRow, row_id)
+    if not row or row.table_id != table_id:
+        raise HTTPException(404, "Fila no encontrada")
+    if row.chunk_id:
+        await db.execute(delete(DocumentChunk).where(DocumentChunk.id == row.chunk_id))
+    await db.delete(row)
     await db.commit()
     return {"ok": True}
 
@@ -1377,6 +2038,7 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
 </div>
 {help_menu_html}
 {contact_form_html}
+{bot_form_html}
 <div class="messages" id="msgs"></div>
 <div class="input-area">
   {attach_button_html}
@@ -1625,9 +2287,89 @@ async function submitContactForm() {{
   }}
 }}
 
+const BOT_FORMS = {bot_forms_js};
+let currentBotForm = null;
+
+function botFormFieldRowHtml(field) {{
+  const id = `bf-f-${{field.key}}`;
+  const req = field.required ? " *" : "";
+  const help = field.help_text ? `<div style="font-size:11px;color:#999;margin-top:2px">${{esc(field.help_text)}}</div>` : "";
+  const input = field.field_type === "file"
+    ? `<input type="file" id="${{id}}" accept="application/pdf,image/jpeg,image/png">`
+    : `<input type="${{field.field_type === "number" ? "number" : field.field_type === "email" ? "email" : "text"}}" id="${{id}}" maxlength="1000">`;
+  return `<label for="${{id}}">${{esc(field.label)}}${{req}}</label>${{input}}${{help}}`;
+}}
+
+function openBotForm(formId) {{
+  const form = BOT_FORMS.find(f => f.id === formId);
+  if (!form) return;
+  document.getElementById("help-menu")?.classList.remove("open");
+  currentBotForm = form;
+  document.getElementById("bf-title").textContent = form.title;
+  const desc = document.getElementById("bf-description");
+  desc.textContent = form.description || "";
+  desc.style.display = form.description ? "" : "none";
+  document.getElementById("bf-fields").innerHTML = form.fields.map(botFormFieldRowHtml).join("");
+  document.getElementById("bot-form")?.classList.add("open");
+  document.getElementById("bf-error").classList.remove("show");
+  setTimeout(() => document.getElementById("bf-fields").querySelector("input")?.focus(), 100);
+}}
+
+function closeBotForm() {{
+  document.getElementById("bot-form")?.classList.remove("open");
+}}
+
+async function submitBotForm() {{
+  if (!currentBotForm) return;
+  const errorEl = document.getElementById("bf-error");
+  const showError = msg => {{ errorEl.textContent = msg; errorEl.classList.add("show"); }};
+  errorEl.classList.remove("show");
+
+  const fd = new FormData();
+  fd.append("session_id", SESSION);
+  for (const field of currentBotForm.fields) {{
+    const el = document.getElementById(`bf-f-${{field.key}}`);
+    if (field.field_type === "file") {{
+      const file = el?.files?.[0];
+      if (!file) {{ if (field.required) return showError(`Falta adjuntar: ${{field.label}}`); continue; }}
+      fd.append(`file_${{field.key}}`, file);
+    }} else {{
+      const value = (el?.value || "").trim();
+      if (!value) {{ if (field.required) return showError(`Falta completar: ${{field.label}}`); continue; }}
+      fd.append(`field_${{field.key}}`, value);
+    }}
+  }}
+
+  const submitBtn = document.getElementById("bf-submit");
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Enviando...";
+  try {{
+    const headers = {{}};
+    if (API_KEY) headers["X-API-Key"] = API_KEY;
+    const res = await fetch(`${{API}}/api/v1/chat/${{BOT_ID}}/forms/${{currentBotForm.id}}/submit`, {{
+      method: "POST", headers, body: fd,
+    }});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "No se pudo enviar el formulario");
+    closeBotForm();
+    addMsg("bot", data.message);
+  }} catch(e) {{
+    showError(e.message);
+  }} finally {{
+    submitBtn.disabled = false;
+    submitBtn.textContent = "Enviar";
+  }}
+}}
+
 document.getElementById("cf-close")?.addEventListener("click", closeContactForm);
 document.getElementById("cf-submit")?.addEventListener("click", submitContactForm);
 document.querySelector("#help-menu .contact-form-btn")?.addEventListener("click", openContactForm);
+document.getElementById("help-menu")?.addEventListener("click", e => {{
+  const btn = e.target.closest(".bot-form-btn");
+  if (btn) openBotForm(btn.dataset.formId);
+}});
+document.getElementById("bf-close")?.addEventListener("click", closeBotForm);
+document.getElementById("bf-submit")?.addEventListener("click", submitBotForm);
 // El chip "Formulario" (inline, tras una respuesta sin resultado) se arma dinámicamente en
 // addMsg(): se delega el click en #msgs en vez de bindear cada chip al insertarlo.
 document.getElementById("msgs").addEventListener("click", e => {{
@@ -1696,20 +2438,29 @@ async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db
         f'<img class="gov-logo" src="{html.escape(api_url.rstrip("/") + gov_logo_url)}" alt="Gobierno de Salta">'
         if gov_logo_url else ""
     )
-    def _human_contact_menu(bot, id_prefix: str) -> tuple[str, str, str]:
-        """Botón + menú desplegable + panel del formulario de intervención humana. HTML vacío
-        (los tres) si el bot no tiene contacto configurado. Reutilizado por la página de chat
-        completa; el widget (JS aparte) arma el suyo con la misma info vía config."""
+    def _human_contact_menu(bot, id_prefix: str, extra_items: list = None) -> tuple[str, str, str]:
+        """Botón + menú desplegable + panel del formulario de intervención humana. extra_items
+        son botones adicionales para el mismo menú (los formularios del bot): el botón/menú se
+        arman igual aunque el bot no tenga contacto configurado, si hay al menos un extra_item.
+        HTML vacío (los tres) si no hay ni contacto ni formularios. Reutilizado por la página de
+        chat completa; el widget (JS aparte) arma el suyo con la misma info vía config."""
         has_contact = bool(bot.contact_email or bot.contact_whatsapp)
-        if not has_contact:
+        extra_items = extra_items or []
+        if not has_contact and not extra_items:
             return "", "", ""
 
-        items = ['<button type="button" class="contact-form-btn">📝 Completar formulario</button>']
-        if bot.contact_whatsapp:
-            wa = f"https://wa.me/{html.escape(bot.contact_whatsapp)}"
-            items.append(f'<a href="{wa}" target="_blank" rel="noopener">🟢 Escribir por WhatsApp</a>')
-        button = f'<button type="button" id="{id_prefix}-btn" aria-label="Hablar con una persona" title="Hablar con una persona">🆘</button>'
+        items = []
+        if has_contact:
+            items.append('<button type="button" class="contact-form-btn">📝 Completar formulario</button>')
+            if bot.contact_whatsapp:
+                wa = f"https://wa.me/{html.escape(bot.contact_whatsapp)}"
+                items.append(f'<a href="{wa}" target="_blank" rel="noopener">🟢 Escribir por WhatsApp</a>')
+        items += extra_items
+        button = f'<button type="button" id="{id_prefix}-btn" aria-label="Más opciones" title="Más opciones">🆘</button>'
         menu = f'<div id="{id_prefix}-menu">' + "".join(items) + "</div>"
+
+        if not has_contact:
+            return button, menu, ""
 
         wa_link = (
             f'<a class="cf-wa" href="https://wa.me/{html.escape(bot.contact_whatsapp)}" target="_blank" rel="noopener">'
@@ -1735,7 +2486,23 @@ async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db
 </div>'''
         return button, menu, form
 
-    help_button_html, help_menu_html, contact_form_html = _human_contact_menu(bot, "help")
+    bot_forms = await _active_bot_forms_json(bot_id, db)
+    form_menu_items = [
+        f'<button type="button" class="bot-form-btn" data-form-id="{html.escape(f["id"])}">📋 {html.escape(f["title"])}</button>'
+        for f in bot_forms
+    ]
+    help_button_html, help_menu_html, contact_form_html = _human_contact_menu(bot, "help", form_menu_items)
+    # Panel genérico (igual para cualquier formulario): el contenido lo arma el JS según el
+    # esquema de BOT_FORMS al abrirlo — evita repetir un <div> por formulario en el HTML.
+    bot_form_html = ('''<div id="bot-form">
+  <div class="cf-header"><span id="bf-title">Formulario</span><button type="button" id="bf-close" aria-label="Cerrar">✕</button></div>
+  <div class="cf-body">
+    <div id="bf-description" style="font-size:12.5px;color:#666;margin-bottom:10px"></div>
+    <div id="bf-fields"></div>
+    <div class="cf-error" id="bf-error"></div>
+    <button type="button" class="cf-submit" id="bf-submit">Enviar</button>
+  </div>
+</div>''') if bot_forms else ""
 
     attach_button_html = (
         '<input type="file" id="file-input" accept="application/pdf" style="display:none">'
@@ -1778,6 +2545,8 @@ async def chat_page(bot_id: str, request: Request, key: Optional[str] = None, db
         help_button_html=help_button_html,
         help_menu_html=help_menu_html,
         contact_form_html=contact_form_html,
+        bot_form_html=bot_form_html,
+        bot_forms_js=json.dumps(bot_forms).replace("</", "<\/"),
         contact_email_js=js_str(bot.contact_email or ""),
         contact_whatsapp_js=js_str(bot.contact_whatsapp or ""),
         bot_name_js=js_str(bot.bot_name or bot.name),
@@ -1979,6 +2748,113 @@ async def submit_contact_request(
 
     logger.info("contact_request_created", bot_id=bot_id, request_id=req.id, email_sent=email_sent)
     return {"ok": True, "message": "¡Gracias! Recibimos tu consulta y te vamos a contactar a la brevedad."}
+
+
+@chat_router.post("/{bot_id}/forms/{form_id}/submit")
+async def submit_bot_form(bot_id: str, form_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Envío de un formulario del bot desde el chat público. Los campos vienen en multipart con
+    nombre dinámico (field_<key> para texto/número/email, file_<key> para archivo) porque el
+    esquema lo arma el admin — no hay forma de tiparlos como parámetros fijos de FastAPI."""
+    bot = await db.get(Chatbot, bot_id)
+    if not bot or not bot.is_active or not bot.is_public:
+        raise HTTPException(404, "Chatbot no disponible")
+    await _authorize_public_chat(bot_id, request, db)
+
+    form = await db.get(BotForm, form_id, options=[selectinload(BotForm.fields)])
+    if not form or form.chatbot_id != bot_id or not form.is_active:
+        raise HTTPException(404, "Formulario no disponible")
+
+    try:
+        form_data = await request.form()
+    except Exception:
+        raise HTTPException(400, "No se pudo leer el formulario enviado")
+    session_id = form_data.get("session_id")
+    session_id = session_id.strip() if isinstance(session_id, str) and session_id.strip() else None
+
+    data: dict = {}
+    to_save: list = []  # (field, UploadFile, content, mime, ext)
+    errors: list = []
+    for field in form.fields:
+        if field.field_type == FormFieldType.file:
+            upload = form_data.get(f"file_{field.key}")
+            # request.form() devuelve starlette.datastructures.UploadFile, la clase BASE de la
+            # que hereda fastapi.UploadFile — isinstance contra la de fastapi acá da falso siempre.
+            if not isinstance(upload, StarletteUploadFile) or not upload.filename:
+                if field.required:
+                    errors.append(f"Falta adjuntar: {field.label}")
+                continue
+            content = await upload.read()
+            if not content:
+                if field.required:
+                    errors.append(f"Falta adjuntar: {field.label}")
+                continue
+            if len(content) > settings.form_file_max_size_bytes:
+                errors.append(f"{field.label}: el archivo supera el límite de {settings.FORM_FILE_MAX_SIZE_MB}MB")
+                continue
+            sniffed = _sniff_form_file(content)
+            if not sniffed:
+                errors.append(f"{field.label}: solo se aceptan PDF, JPG o PNG")
+                continue
+            mime, ext = sniffed
+            to_save.append((field, upload, content, mime, ext))
+            continue
+
+        raw = form_data.get(f"field_{field.key}")
+        value = raw.strip() if isinstance(raw, str) else ""
+        if not value:
+            if field.required:
+                errors.append(f"Falta completar: {field.label}")
+            continue
+        if len(value) > 1000:
+            errors.append(f"{field.label}: texto demasiado largo (máx 1000 caracteres)")
+            continue
+        if field.field_type == FormFieldType.number:
+            try:
+                float(value.replace(",", "."))
+            except ValueError:
+                errors.append(f"{field.label}: tiene que ser un número")
+                continue
+        elif field.field_type == FormFieldType.email:
+            if not EMAIL_FIELD_RE.match(value):
+                errors.append(f"{field.label}: el email no es válido")
+                continue
+        data[field.key] = value
+
+    if errors:
+        raise HTTPException(400, " · ".join(errors))
+
+    conversation_id = None
+    if session_id:
+        conv = await db.scalar(
+            select(Conversation)
+            .where(Conversation.chatbot_id == bot_id, Conversation.session_id == session_id,
+                   Conversation.is_active == True)
+            .order_by(Conversation.started_at.desc())
+        )
+        conversation_id = conv.id if conv else None
+
+    submission = BotFormSubmission(
+        form_id=form_id, chatbot_id=bot_id, conversation_id=conversation_id,
+        data=data, ip_address=get_client_ip(request),
+    )
+    db.add(submission)
+    await db.flush()  # necesita el id de la respuesta para la carpeta de archivos
+
+    if to_save:
+        form_dir = os.path.join(FORM_FILES_DIR, bot_id, submission.id)
+        os.makedirs(form_dir, exist_ok=True)
+        for field, upload, content, mime, ext in to_save:
+            safe_name = f"{uuid.uuid4()}{ext}"
+            async with aiofiles.open(os.path.join(form_dir, safe_name), "wb") as fh:
+                await fh.write(content)
+            db.add(BotFormSubmissionFile(
+                submission_id=submission.id, field_key=field.key, filename=safe_name,
+                original_filename=_safe_filename(upload.filename), mime_type=mime, file_size=len(content),
+            ))
+
+    await db.commit()
+    logger.info("bot_form_submitted", bot_id=bot_id, form_id=form_id, submission_id=submission.id, files=len(to_save))
+    return {"ok": True, "message": form.success_message or "¡Gracias! Recibimos tu información."}
 
 
 # ═══════════════════════════════════════════════════════════════

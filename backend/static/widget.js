@@ -308,6 +308,7 @@
         chatUploadMaxMb: config.chatUploadMaxMb || 8,
         orgLogoUrl: config.orgLogoUrl || null,
         suggestedQuestions: Array.isArray(config.suggestedQuestions) ? config.suggestedQuestions.slice(0,4) : [],
+        forms: Array.isArray(config.forms) ? config.forms : [],  // formularios activos del bot
         showBranding: config.showBranding !== false,
         apiKey: config.apiKey || null,
       };
@@ -378,6 +379,7 @@
           </div>
           ${this._helpMenuHtml()}
           ${this._contactFormHtml()}
+          ${this._botFormHtml()}
 
           <div id="rb-messages" role="log" aria-live="polite"></div>
 
@@ -451,6 +453,12 @@
       document.querySelector('#rb-help-menu .rb-contact-form-btn')?.addEventListener('click', () => this._openContactForm());
       document.getElementById('rb-cf-close')?.addEventListener('click', () => this._closeContactForm());
       document.getElementById('rb-cf-submit')?.addEventListener('click', () => this._submitContactForm());
+      document.getElementById('rb-help-menu')?.addEventListener('click', e => {
+        const btn = e.target.closest('.rb-bot-form-btn');
+        if (btn) this._openBotForm(btn.dataset.formId);
+      });
+      document.getElementById('rb-bf-close')?.addEventListener('click', () => this._closeBotForm());
+      document.getElementById('rb-bf-submit')?.addEventListener('click', () => this._submitBotForm());
 
       this.elements.send.addEventListener('click', () => this._sendMessage());
       this.elements.input.addEventListener('keydown', e => {
@@ -705,17 +713,118 @@
     }
 
     _helpButtonHtml() {
-      if (!this.config.contactEmail && !this.config.contactWhatsapp) return '';
-      return '<button type="button" id="rb-help-btn" aria-label="Hablar con una persona" title="Hablar con una persona">🆘</button>';
+      if (!this.config.contactEmail && !this.config.contactWhatsapp && !this.config.forms.length) return '';
+      return '<button type="button" id="rb-help-btn" aria-label="Más opciones" title="Más opciones">🆘</button>';
     }
 
     _helpMenuHtml() {
-      if (!this.config.contactEmail && !this.config.contactWhatsapp) return '';
-      const items = ['<button type="button" class="rb-contact-form-btn">📝 Completar formulario</button>'];
-      if (this.config.contactWhatsapp) {
-        items.push(`<a href="https://wa.me/${this._escapeHtml(this.config.contactWhatsapp)}" target="_blank" rel="noopener">🟢 Escribir por WhatsApp</a>`);
+      if (!this.config.contactEmail && !this.config.contactWhatsapp && !this.config.forms.length) return '';
+      const items = [];
+      if (this.config.contactEmail || this.config.contactWhatsapp) {
+        items.push('<button type="button" class="rb-contact-form-btn">📝 Completar formulario</button>');
+        if (this.config.contactWhatsapp) {
+          items.push(`<a href="https://wa.me/${this._escapeHtml(this.config.contactWhatsapp)}" target="_blank" rel="noopener">🟢 Escribir por WhatsApp</a>`);
+        }
+      }
+      for (const form of this.config.forms) {
+        items.push(`<button type="button" class="rb-bot-form-btn" data-form-id="${this._escapeHtml(form.id)}">📋 ${this._escapeHtml(form.title)}</button>`);
       }
       return `<div id="rb-help-menu">${items.join('')}</div>`;
+    }
+
+    // Un campo del formulario dinámico (texto/número/email/archivo, los define el admin).
+    _botFormFieldRowHtml(field) {
+      const id = `rb-bf-f-${field.key}`;
+      const req = field.required ? ' *' : '';
+      const help = field.help_text
+        ? `<div style="font-size:11px;color:#999;margin-top:2px">${this._escapeHtml(field.help_text)}</div>` : '';
+      const input = field.field_type === 'file'
+        ? `<input type="file" id="${id}" accept="application/pdf,image/jpeg,image/png">`
+        : `<input type="${field.field_type === 'number' ? 'number' : field.field_type === 'email' ? 'email' : 'text'}" id="${id}" maxlength="1000">`;
+      return `<label for="${id}">${this._escapeHtml(field.label)}${req}</label>${input}${help}`;
+    }
+
+    // Overlay genérico: un solo markup para todos los formularios del bot, el contenido se arma
+    // al abrir cada uno (_openBotForm) según su esquema.
+    _botFormHtml() {
+      if (!this.config.forms.length) return '';
+      return `
+        <div id="rb-bot-form">
+          <div class="rb-cf-header">
+            <span id="rb-bf-title">Formulario</span>
+            <button type="button" id="rb-bf-close" aria-label="Cerrar">✕</button>
+          </div>
+          <div class="rb-cf-body">
+            <div id="rb-bf-description" style="font-size:12.5px;color:#666;margin-bottom:10px"></div>
+            <div id="rb-bf-fields"></div>
+            <div class="rb-cf-error" id="rb-bf-error"></div>
+            <button type="button" class="rb-cf-submit" id="rb-bf-submit">Enviar</button>
+          </div>
+        </div>`;
+    }
+
+    _openBotForm(formId) {
+      const form = this.config.forms.find(f => f.id === formId);
+      if (!form) return;
+      document.getElementById('rb-help-menu')?.classList.remove('open');
+      this._currentBotForm = form;
+      document.getElementById('rb-bf-title').textContent = form.title;
+      const desc = document.getElementById('rb-bf-description');
+      desc.textContent = form.description || '';
+      desc.style.display = form.description ? '' : 'none';
+      document.getElementById('rb-bf-fields').innerHTML = form.fields.map(f => this._botFormFieldRowHtml(f)).join('');
+      const overlay = document.getElementById('rb-bot-form');
+      if (!overlay) return;
+      overlay.classList.add('open');
+      document.getElementById('rb-bf-error').classList.remove('show');
+      setTimeout(() => document.getElementById('rb-bf-fields').querySelector('input')?.focus(), 100);
+    }
+
+    _closeBotForm() {
+      document.getElementById('rb-bot-form')?.classList.remove('open');
+    }
+
+    async _submitBotForm() {
+      const form = this._currentBotForm;
+      if (!form) return;
+      const errorEl = document.getElementById('rb-bf-error');
+      const showError = msg => { errorEl.textContent = msg; errorEl.classList.add('show'); };
+      errorEl.classList.remove('show');
+
+      const fd = new FormData();
+      fd.append('session_id', this.sessionId);
+      for (const field of form.fields) {
+        const el = document.getElementById(`rb-bf-f-${field.key}`);
+        if (field.field_type === 'file') {
+          const file = el?.files?.[0];
+          if (!file) { if (field.required) return showError(`Falta adjuntar: ${field.label}`); continue; }
+          fd.append(`file_${field.key}`, file);
+        } else {
+          const value = (el?.value || '').trim();
+          if (!value) { if (field.required) return showError(`Falta completar: ${field.label}`); continue; }
+          fd.append(`field_${field.key}`, value);
+        }
+      }
+
+      const submitBtn = document.getElementById('rb-bf-submit');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Enviando...';
+      try {
+        const headers = {};
+        if (this.config.apiKey) headers['X-API-Key'] = this.config.apiKey;
+        const res = await fetch(`${this.config.apiUrl}/api/v1/chat/${this.config.botId}/forms/${form.id}/submit`, {
+          method: 'POST', headers, body: fd,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'No se pudo enviar el formulario');
+        this._closeBotForm();
+        this._appendMessage('bot', data.message);
+      } catch(err) {
+        showError(err.message);
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Enviar';
+      }
     }
 
     // Panel del formulario "hablar con una persona" (overlay dentro de la ventana del chat).

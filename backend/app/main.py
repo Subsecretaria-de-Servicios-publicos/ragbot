@@ -21,6 +21,7 @@ from app.api.routers import (
     auth_router, users_router, chatbots_router, api_keys_router,
     ai_providers_router, branding_router, documents_router, chat_router, analytics_router,
     contact_requests_router, admin_contact_router, bot_files_router,
+    bot_forms_router, admin_bot_forms_router, knowledge_router,
 )
 
 logger = structlog.get_logger()
@@ -128,6 +129,9 @@ app.include_router(bot_files_router, prefix=API_PREFIX)
 app.include_router(chat_router, prefix=API_PREFIX)
 app.include_router(contact_requests_router, prefix=API_PREFIX)
 app.include_router(admin_contact_router, prefix=API_PREFIX)
+app.include_router(bot_forms_router, prefix=API_PREFIX)
+app.include_router(admin_bot_forms_router, prefix=API_PREFIX)
+app.include_router(knowledge_router, prefix=API_PREFIX)
 app.include_router(analytics_router, prefix=API_PREFIX)
 
 # ─── Static Files (widget JS, dashboard) ──────────────────────
