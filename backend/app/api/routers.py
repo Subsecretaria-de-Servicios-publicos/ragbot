@@ -1910,8 +1910,9 @@ CHAT_PAGE_TEMPLATE = """<!DOCTYPE html>
              display: flex; align-items: center; justify-content: center;
              font-size: 14px; color: #fff; flex-shrink: 0; }}
   .msg.user .msg-av {{ background: #e8e8f5; color: #555; }}
-  .bubble {{ max-width: 72%; padding: 11px 15px; border-radius: 18px;
-             font-size: 14px; line-height: 1.5; }}
+  .msg-content {{ max-width: 72%; min-width: 0; }}
+  .bubble {{ padding: 11px 15px; border-radius: 18px;
+             font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }}
   .msg.bot .bubble {{ background: {bot_bubble_color}; border-bottom-left-radius: 4px; color: #1a1a2e;
                       box-shadow: 0 1px 4px rgba(0,0,0,0.07); }}
   .msg.user .bubble {{ background: var(--color); color: #fff; border-bottom-right-radius: 4px; }}
@@ -2097,7 +2098,7 @@ function addMsg(role, content, sources, suggestContact) {{
   const d = document.createElement("div");
   d.className = "msg " + role;
   d.innerHTML = `<div class="msg-av">${{role==="bot"?"{avatar_js}":"👤"}}</div>
-    <div><div class="bubble">${{linkify(esc(content)).replace(/\\n/g,"<br>")}}${{srcs?`<div class="sources">${{srcs}}</div>`:""}}</div>
+    <div class="msg-content"><div class="bubble">${{linkify(esc(content)).replace(/\\n/g,"<br>")}}${{srcs?`<div class="sources">${{srcs}}</div>`:""}}</div>
     <div class="msg-time">${{time}}</div>${{contact}}</div>`;
   m.appendChild(d);
   m.scrollTop = m.scrollHeight;

@@ -181,12 +181,16 @@
     }
     .rb-msg.user .rb-msg-avatar { background: #f0f0f5; color: #666; }
 
+    .rb-msg-content { max-width: 75%; min-width: 0; }
     .rb-bubble {
-      max-width: 75%;
       padding: 10px 14px;
       border-radius: 16px;
       font-size: 13.5px;
       line-height: 1.5;
+      /* Si la fuente Inter no llega a cargar (red sin acceso a Google Fonts, bastante común en
+         redes de organismos), el navegador usa una de reemplazo con métricas distintas y el
+         texto puede no entrar en el ancho calculado — esto evita que se salga de la burbuja. */
+      overflow-wrap: anywhere;
     }
     .rb-msg.bot .rb-bubble {
       background: var(--rb-bubble-bg, #f5f5f8);
@@ -593,7 +597,7 @@
 
       el.innerHTML = `
         <div class="rb-msg-avatar">${role === 'bot' ? this._avatarHtml(this.config.botAvatar) : '👤'}</div>
-        <div>
+        <div class="rb-msg-content">
           <div class="rb-bubble${isError ? ' style="background:#fff0f0;color:#ef4444"' : ''}">${this._renderMessageContent(content)}${sourcesHtml}</div>
           <div class="rb-time">${time}</div>
           ${contactHtml}
