@@ -1,8 +1,8 @@
 /*!
- * RAGBot Widget v1.0
+ * Matriabot Widget v1.0
  * Widget embebible como globo flotante o página completa
  * Uso: <script src="URL/static/widget.js"></script>
- *      window.RAGBot.init({ botId, apiUrl, primaryColor, position })
+ *      window.Matriabot.init({ botId, apiUrl, primaryColor, position })
  */
 (function(window) {
   'use strict';
@@ -11,10 +11,10 @@
   const CSS = `
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
 
-    #ragbot-container * { box-sizing: border-box; font-family: 'Inter', sans-serif; }
+    #matriabot-container * { box-sizing: border-box; font-family: 'Inter', sans-serif; }
 
     /* Floating Button */
-    #ragbot-trigger {
+    #matriabot-trigger {
       position: fixed;
       width: 56px; height: 56px;
       border-radius: 50%;
@@ -27,7 +27,7 @@
       transition: transform 0.2s, box-shadow 0.2s;
       animation: rbPulse 3s infinite;
     }
-    #ragbot-trigger:hover { transform: scale(1.08); box-shadow: 0 6px 28px rgba(0,0,0,0.3); }
+    #matriabot-trigger:hover { transform: scale(1.08); box-shadow: 0 6px 28px rgba(0,0,0,0.3); }
     @keyframes rbPulse {
       0%, 100% { box-shadow: 0 4px 20px rgba(0,0,0,0.25); }
       50% { box-shadow: 0 4px 28px var(--rb-color, #6c63ff), 0 0 0 8px rgba(108,99,255,0.12); }
@@ -36,12 +36,12 @@
       width: 100%; height: 100%; border-radius: 50%;
       display: flex; align-items: center; justify-content: center; overflow: hidden;
     }
-    #ragbot-trigger.bottom-right { bottom: 24px; right: 24px; }
-    #ragbot-trigger.bottom-left { bottom: 24px; left: 24px; }
-    #ragbot-trigger.top-right { top: 24px; right: 24px; }
+    #matriabot-trigger.bottom-right { bottom: 24px; right: 24px; }
+    #matriabot-trigger.bottom-left { bottom: 24px; left: 24px; }
+    #matriabot-trigger.top-right { top: 24px; right: 24px; }
 
     /* Notification badge */
-    #ragbot-badge {
+    #matriabot-badge {
       position: absolute; top: -4px; right: -4px;
       background: #ef4444; color: #fff;
       width: 18px; height: 18px; border-radius: 50%;
@@ -50,7 +50,7 @@
     }
 
     /* Chat Window */
-    #ragbot-window {
+    #matriabot-window {
       position: fixed;
       /* ancla para #rb-help-menu (position: absolute) */
       width: 380px;
@@ -66,10 +66,10 @@
     }
     @keyframes rbSlideIn { from { opacity:0; transform: scale(0.85) translateY(20px); } }
 
-    #ragbot-window.open { display: flex; }
-    #ragbot-window.bottom-right { bottom: 92px; right: 24px; }
-    #ragbot-window.bottom-left { bottom: 92px; left: 24px; }
-    #ragbot-window.top-right { top: 92px; right: 24px; }
+    #matriabot-window.open { display: flex; }
+    #matriabot-window.bottom-right { bottom: 92px; right: 24px; }
+    #matriabot-window.bottom-left { bottom: 92px; left: 24px; }
+    #matriabot-window.top-right { top: 92px; right: 24px; }
 
     /* Header */
     #rb-header {
@@ -292,8 +292,8 @@
     #rb-footer-logo { max-height: 26px; max-width: 75%; width: auto; object-fit: contain; display: block; }
   `;
 
-  // ─── RAGBot Widget Class ────────────────────────────────────
-  class RAGBotWidget {
+  // ─── Matriabot Widget Class ────────────────────────────────────
+  class MatriabotWidget {
     constructor(config) {
       this.config = {
         botId: config.botId,
@@ -326,18 +326,18 @@
     }
 
     _getSessionId() {
-      let sid = sessionStorage.getItem('ragbot_session');
+      let sid = sessionStorage.getItem('matriabot_session');
       if (!sid) {
         sid = 'sess_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-        sessionStorage.setItem('ragbot_session', sid);
+        sessionStorage.setItem('matriabot_session', sid);
       }
       return sid;
     }
 
     _injectStyles() {
-      if (document.getElementById('ragbot-styles')) return;
+      if (document.getElementById('matriabot-styles')) return;
       const style = document.createElement('style');
-      style.id = 'ragbot-styles';
+      style.id = 'matriabot-styles';
       style.textContent = CSS.replace(/var\(--rb-color, #6c63ff\)/g, `var(--rb-color, ${this.config.primaryColor})`);
       document.head.appendChild(style);
 
@@ -360,16 +360,16 @@
 
     _render() {
       const container = document.createElement('div');
-      container.id = 'ragbot-container';
+      container.id = 'matriabot-container';
       container.innerHTML = `
         <!-- Trigger Button -->
-        <button id="ragbot-trigger" class="${this.config.position}" aria-label="Abrir chat">
+        <button id="matriabot-trigger" class="${this.config.position}" aria-label="Abrir chat">
           <span id="rb-trigger-icon">${this._triggerIconHtml()}</span>
-          <span id="ragbot-badge">1</span>
+          <span id="matriabot-badge">1</span>
         </button>
 
         <!-- Chat Window -->
-        <div id="ragbot-window" class="${this.config.position}" role="dialog" aria-label="Chat con ${this._escapeHtml(this.config.botName)}">
+        <div id="matriabot-window" class="${this.config.position}" role="dialog" aria-label="Chat con ${this._escapeHtml(this.config.botName)}">
           <div id="rb-header">
             ${this._govLogoHtml()}
             ${this._orgLogoHtml()}
@@ -404,12 +404,12 @@
       `;
       document.body.appendChild(container);
       this.elements = {
-        trigger: document.getElementById('ragbot-trigger'),
-        window: document.getElementById('ragbot-window'),
+        trigger: document.getElementById('matriabot-trigger'),
+        window: document.getElementById('matriabot-window'),
         messages: document.getElementById('rb-messages'),
         input: document.getElementById('rb-input'),
         send: document.getElementById('rb-send'),
-        badge: document.getElementById('ragbot-badge'),
+        badge: document.getElementById('matriabot-badge'),
         triggerIcon: document.getElementById('rb-trigger-icon'),
       };
       this._addWelcomeMessage();
@@ -867,7 +867,7 @@
         const src = url.startsWith('/') ? this.config.apiUrl + url : url;
         return `<div id="rb-footer" class="rb-footer-logo"><img id="rb-footer-logo" src="${this._escapeHtml(src)}" alt="Modernización"></div>`;
       }
-      return this.config.showBranding ? '<div id="rb-footer"><a href="#" target="_blank">Powered by RAGBot</a></div>' : '';
+      return this.config.showBranding ? '<div id="rb-footer"><a href="#" target="_blank">Powered by Matriabot</a></div>' : '';
     }
 
     _orgLogoHtml() {
@@ -896,15 +896,15 @@
   }
 
   // ─── Expose API ────────────────────────────────────────────
-  window.RAGBot = {
+  window.Matriabot = {
     init: (config) => {
-      if (window._ragbotInstance) window._ragbotInstance = null;
-      window._ragbotInstance = new RAGBotWidget(config);
-      return window._ragbotInstance;
+      if (window._matriabotInstance) window._matriabotInstance = null;
+      window._matriabotInstance = new MatriabotWidget(config);
+      return window._matriabotInstance;
     },
-    open: () => window._ragbotInstance?.open(),
-    close: () => window._ragbotInstance?.close(),
-    toggle: () => window._ragbotInstance?.toggle(),
+    open: () => window._matriabotInstance?.open(),
+    close: () => window._matriabotInstance?.close(),
+    toggle: () => window._matriabotInstance?.toggle(),
   };
 
 })(window);

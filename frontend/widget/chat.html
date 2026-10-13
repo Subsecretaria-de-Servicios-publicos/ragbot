@@ -94,7 +94,7 @@
 <script>
 const params = new URLSearchParams(window.location.search);
 const BOT_ID = window.location.pathname.split('/').pop() || params.get('bot');
-const API_URL = window.RAGBOT_API_URL || params.get('api') || 'http://localhost:8000';
+const API_URL = window.MATRIABOT_API_URL || params.get('api') || 'http://localhost:8000';
 let SESSION_ID = 'page_' + Math.random().toString(36).slice(2);
 let typing = false;
 

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex">
-<title>RAGBot — Vista previa del widget</title>
+<title>Matriabot — Vista previa del widget</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; padding: 40px 20px;
@@ -75,16 +75,16 @@
       history.replaceState(null, '', url);
 
       // Si ya había un widget cargado, lo saca antes de meter uno nuevo.
-      document.getElementById('ragbot-widget-container')?.remove();
-      document.getElementById('ragbot-styles')?.remove();
-      document.getElementById('ragbot-widget-script')?.remove();
-      if (window.RAGBot) delete window.RAGBot;
+      document.getElementById('matriabot-widget-container')?.remove();
+      document.getElementById('matriabot-styles')?.remove();
+      document.getElementById('matriabot-widget-script')?.remove();
+      if (window.Matriabot) delete window.Matriabot;
 
       setStatus('Cargando widget…', 'info');
       // Usa el script real que sirve el backend para ese bot: trae la config (nombre, colores,
       // logos, avatar, API key si tiene una) ya resuelta desde el servidor — no hay nada que bajar.
       const s = document.createElement('script');
-      s.id = 'ragbot-widget-script';
+      s.id = 'matriabot-widget-script';
       s.src = `${apiUrl}/api/v1/chatbots/${encodeURIComponent(botId)}/widget.js`;
       s.onload = () => setStatus('Listo. Abrí la burbuja, abajo a la derecha.', 'info');
       s.onerror = () => setStatus(

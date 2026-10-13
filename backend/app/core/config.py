@@ -14,7 +14,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    APP_NAME: str = "RAGBot System"
+    APP_NAME: str = "Matriabot"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
 
@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     PUBLIC_API_URL: str = ""
 
     LOG_LEVEL: str = "INFO"
-    LOG_FILE: str = "./logs/ragbot.log"
+    LOG_FILE: str = "./logs/matriabot.log"
 
     # ─── ALERTAS DE FALLO DEL BOT ───────────────────────────
     ALERT_EMAIL_TO: str = ""          # destinatarios separados por coma; vacío = sin mail

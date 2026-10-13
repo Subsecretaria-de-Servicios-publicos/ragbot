@@ -1,5 +1,5 @@
 [Unit]
-Description=RAGBot backend (FastAPI)
+Description=Matriabot backend (FastAPI)
 After=network.target redis-server.service
 Wants=redis-server.service
 

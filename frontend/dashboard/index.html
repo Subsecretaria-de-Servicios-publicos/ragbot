@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RAGBot Dashboard</title>
+<title>Matriabot Dashboard</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
 
@@ -354,7 +354,7 @@
   <div class="login-box">
     <div class="login-logo">
       <div class="logo-icon">🤖</div>
-      <div class="login-title">RAGBot</div>
+      <div class="login-title">Matriabot</div>
       <div class="login-sub">Dashboard de Administración</div>
     </div>
     <div class="login-error" id="login-error">Credenciales inválidas</div>
@@ -377,7 +377,7 @@
   <div class="sidebar-logo">
     <div class="logo-icon">🤖</div>
     <div>
-      <div class="logo-text">RAGBOT</div>
+      <div class="logo-text">MATRIABOT</div>
       <div class="logo-ver">v1.0.0</div>
     </div>
   </div>
@@ -1371,9 +1371,9 @@
 // CONFIG & STATE
 // ═══════════════════════════════════════════════════════════════
 const _isLocal = ['localhost', '127.0.0.1'].includes(location.hostname);
-let API_URL = localStorage.getItem('ragbot_api_url')
-  || (_isLocal ? 'http://localhost:8040' : location.origin + '/ragbot');
-let token = localStorage.getItem('ragbot_token');
+let API_URL = localStorage.getItem('matriabot_api_url')
+  || (_isLocal ? 'http://localhost:8040' : location.origin + '/ragbot');  // ruta /ragbot: infraestructura ya publicada, no es parte de la marca
+let token = localStorage.getItem('matriabot_token');
 let currentUser = null;
 let currentBotId = null;
 
@@ -1416,7 +1416,7 @@ async function initDashboard() {
     document.getElementById('login-screen').style.display = 'none';
     loadDashboardStats();
   } catch {
-    localStorage.removeItem('ragbot_token');
+    localStorage.removeItem('matriabot_token');
     token = null;
     document.getElementById('login-screen').style.display = 'flex';
   }
@@ -1433,7 +1433,7 @@ async function doLogin() {
   try {
     const data = await api('/api/v1/auth/login', 'POST', { username, password }, false);
     token = data.access_token;
-    localStorage.setItem('ragbot_token', token);
+    localStorage.setItem('matriabot_token', token);
     document.getElementById('login-error').style.display = 'none';
     await initDashboard();
   } catch {
@@ -1442,7 +1442,7 @@ async function doLogin() {
 }
 
 function doLogout() {
-  localStorage.removeItem('ragbot_token');
+  localStorage.removeItem('matriabot_token');
   token = null;
   currentUser = null;
   document.getElementById('login-pass').value = '';
@@ -2461,7 +2461,7 @@ let currentWidgetConfig = {};
 
 async function updateEmbedCodes(botId) {
   const script1 = `<script>
-  window.RAGBOT_API_URL = "${API_URL}";
+  window.MATRIABOT_API_URL = "${API_URL}";
 <\/script>
 <script src="${API_URL}/api/v1/chatbots/${botId}/widget.js"><\/script>`;
 
@@ -2534,7 +2534,7 @@ async function createApiKey() {
     const created = await api(`/api/v1/chatbots/${currentBotId}/api-keys/`, 'POST', { name: name || 'Default', allowed_origins });
     await loadApiKeys(currentBotId);
     const snippet = `<script>
-  window.RAGBOT_API_URL = "${API_URL}";
+  window.MATRIABOT_API_URL = "${API_URL}";
 <\/script>
 <script src="${API_URL}/api/v1/chatbots/${currentBotId}/widget.js?key=${encodeURIComponent(created.api_key)}"><\/script>`;
     alert(`API key creada — copiala ahora, no se vuelve a mostrar:\n\n${created.api_key}\n\nCódigo de embed con esta key ya incluida:\n\n${snippet}`);
@@ -2911,7 +2911,7 @@ async function saveUserEdit() {
 // ═══════════════════════════════════════════════════════════════
 function saveSettings() {
   API_URL = document.getElementById('settings-api-url').value.trim().replace(/\/$/, '');
-  localStorage.setItem('ragbot_api_url', API_URL);
+  localStorage.setItem('matriabot_api_url', API_URL);
   toast('Configuración guardada', 'success');
 }
 

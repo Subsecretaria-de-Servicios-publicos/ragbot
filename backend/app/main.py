@@ -155,4 +155,4 @@ async def root():
 async def startup_event():
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     os.makedirs("logs", exist_ok=True)
-    logger.info("ragbot_started", version=settings.APP_VERSION)
+    logger.info("matriabot_started", version=settings.APP_VERSION)

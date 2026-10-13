@@ -1,9 +1,9 @@
-# 🤖 RAGBot System — Guía Completa de Implementación
+# 🤖 Matriabot — Guía Completa de Implementación
 
 ## Arquitectura General
 
 ```
-ragbot-system/
+matriabot/
 ├── backend/                   # FastAPI + Python
 │   ├── app/
 │   │   ├── api/               # Endpoints REST
@@ -59,7 +59,7 @@ CREATE EXTENSION vector;
 ### PASO 3: Configurar Entorno Python
 
 ```bash
-cd ragbot-system/backend
+cd matriabot/backend
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 

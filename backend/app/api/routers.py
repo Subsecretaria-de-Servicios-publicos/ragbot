@@ -837,10 +837,10 @@ async def get_widget_script(bot_id: str, request: Request, key: Optional[str] = 
     api_url_json = json.dumps(_public_api_url(request, widget_config.get("api_url"))).replace("</", "<\\/")
     script = f"""(function(){{
   var config = {config_json};
-  config.apiUrl = window.RAGBOT_API_URL || {api_url_json};
+  config.apiUrl = window.MATRIABOT_API_URL || {api_url_json};
   var s = document.createElement('script');
   s.src = config.apiUrl + '/static/widget.js';
-  s.onload = function(){{ window.RAGBot.init(config); }};
+  s.onload = function(){{ window.Matriabot.init(config); }};
   document.head.appendChild(s);
 }})();"""
     from fastapi.responses import Response

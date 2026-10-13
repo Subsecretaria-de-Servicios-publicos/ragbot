@@ -1,6 +1,6 @@
-# Manual del administrador — RAGBot
+# Manual del administrador — Matriabot
 
-Este manual explica cómo usar el **dashboard** de RAGBot para crear y configurar chatbots,
+Este manual explica cómo usar el **dashboard** de Matriabot para crear y configurar chatbots,
 cargar documentos, controlar accesos y gasto, y atender las consultas de las personas.
 Está pensado para administradores y operadores del sistema; no requiere conocimientos de
 programación.

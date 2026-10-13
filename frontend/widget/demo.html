@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Demo — RAGBot Widget Embed</title>
+<title>Demo — Matriabot Widget Embed</title>
 <style>
   body { font-family: system-ui, sans-serif; background: #f9f9fb; color: #333; padding: 40px; max-width: 800px; margin: 0 auto; }
   h1 { color: #6c63ff; margin-bottom: 8px; }
@@ -22,7 +22,7 @@
 </style>
 </head>
 <body>
-  <h1>🤖 RAGBot — Preview del widget</h1>
+  <h1>🤖 Matriabot — Preview del widget</h1>
   <p>Pegá el <code>bot_id</code> del bot que querés ver (lo sacás del Dashboard → el bot → pestaña Embed) y tocá "Cargar widget". El bot tiene que estar marcado como <strong>público</strong> para responder.</p>
 
   <div class="panel">
@@ -36,7 +36,7 @@
   <h2>Cómo embeber en tu sitio</h2>
   <pre>&lt;!-- Agrega esto antes del &lt;/body&gt; --&gt;
 &lt;script&gt;
-  window.RAGBOT_API_URL = "https://tuapi.com";
+  window.MATRIABOT_API_URL = "https://tuapi.com";
 &lt;/script&gt;
 &lt;script src="https://tuapi.com/api/v1/chatbots/TU_BOT_ID/widget.js"&gt;&lt;/script&gt;</pre>
 
@@ -59,9 +59,9 @@
       history.replaceState(null, '', url);
 
       // Si ya había un widget cargado, lo saca antes de meter uno nuevo
-      document.getElementById('ragbot-widget-container')?.remove();
-      document.getElementById('ragbot-styles')?.remove();
-      if (window.RAGBot) delete window.RAGBot;
+      document.getElementById('matriabot-widget-container')?.remove();
+      document.getElementById('matriabot-styles')?.remove();
+      if (window.Matriabot) delete window.Matriabot;
 
       // Usa el script real que sirve el backend para ese bot: trae la config
       // (nombre, colores, logos, avatar, API key si el bot tiene una) ya resuelta desde el servidor.
