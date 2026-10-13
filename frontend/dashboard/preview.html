@@ -50,7 +50,7 @@
   <script>
     const params = new URLSearchParams(location.search);
     const isLocal = ['localhost', '127.0.0.1'].includes(location.hostname);
-    const defaultApi = isLocal ? 'http://localhost:8040' : location.origin + '/ragbot';
+    const defaultApi = isLocal ? 'http://localhost:8040' : location.origin + '/matriabot';
     const apiInput = document.getElementById('cfg-api-url');
     const botInput = document.getElementById('cfg-bot-id');
     apiInput.value = params.get('api') || defaultApi;

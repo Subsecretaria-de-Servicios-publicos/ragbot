@@ -1372,7 +1372,7 @@
 // ═══════════════════════════════════════════════════════════════
 const _isLocal = ['localhost', '127.0.0.1'].includes(location.hostname);
 let API_URL = localStorage.getItem('matriabot_api_url')
-  || (_isLocal ? 'http://localhost:8040' : location.origin + '/ragbot');  // ruta /ragbot: infraestructura ya publicada, no es parte de la marca
+  || (_isLocal ? 'http://localhost:8040' : location.origin + '/matriabot');  // /ragbot sigue andando (compat), pero los embeds nuevos usan /matriabot
 let token = localStorage.getItem('matriabot_token');
 let currentUser = null;
 let currentBotId = null;
