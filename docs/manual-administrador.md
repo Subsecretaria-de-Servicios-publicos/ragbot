@@ -38,7 +38,7 @@ su **rol**:
 | **Superadmin** | Todo lo anterior, más: crear y editar usuarios, administrar los proveedores de IA globales, subir los logos institucionales (Gobierno y Modernización) y ver el listado global de consultas de todos los bots. |
 
 **Alcance por bot:** un operador o viewer solo ve y edita los bots que **creó** o a los que
-fue **asignado** (ver sección 11). Dentro de un bot asignado, un operador puede editar los
+fue **asignado** (ver sección 12). Dentro de un bot asignado, un operador puede editar los
 textos de personalidad y contacto, pero **no** el modelo, el gasto ni la publicación.
 
 ---
@@ -66,7 +66,7 @@ de IA y el system prompt inicial. Luego se entra al bot para completar el resto.
   Gobierno en el encabezado del chat).
 - **Mensaje de bienvenida:** lo primero que ve el usuario al abrir el chat.
 - **System prompt (personalidad):** la forma de hablar del bot. Describí el tono, el personaje
-  o rol y las restricciones. Ver la sección 12 sobre cómo se comporta el bot.
+  o rol y las restricciones. Ver la sección 13 sobre cómo se comporta el bot.
 - **Preguntas de ejemplo (hasta 4):** botones que aparecen al inicio del chat para guiar al
   usuario. Al tocar una, el texto se copia al campo de escritura para que el usuario lo edite
   o lo complete antes de enviarlo. Dejarlas vacías oculta la sección.
@@ -93,6 +93,8 @@ de IA y el system prompt inicial. Luego se entra al bot para completar el resto.
   aunque se tenga el enlace.
 - **Permitir subir un PDF en el chat:** el usuario puede adjuntar un PDF para preguntar sobre
   su contenido (ver sección 10).
+- **Permitir búsqueda en internet:** el bot puede buscar en internet antes de responder (ver
+  sección 11). Tiene costo aparte de los tokens.
 
 Al terminar, tocar **Guardar configuración**.
 
@@ -155,7 +157,7 @@ ofrece el formulario. Ollama (local) no necesita key.
 - **Borrar un documento** elimina también sus fragmentos indexados: el bot deja de usarlo
   de inmediato.
 - El bot responde **solo** con lo que encuentra en los documentos y en su personalidad. Si la
-  información no está, lo dice explícitamente (ver sección 12).
+  información no está, lo dice explícitamente (ver sección 13).
 
 ### 6.2 Archivos descargables — pestaña Archivos (operador)
 Son PDFs de uso práctico: formularios para completar, guías de presentación, instructivos.
@@ -290,7 +292,38 @@ su contenido.
 
 ---
 
-## 11. Accesos: quién ve cada bot (admin)
+## 11. Búsqueda en internet
+
+Si está habilitado (admin, en Publicación), el bot puede buscar en internet antes de responder,
+en vez de limitarse a los documentos y la base de conocimiento. Lo hace el proveedor de IA
+directamente (OpenAI, Anthropic o Google) — no es una búsqueda propia del sistema.
+
+### 11.1 Costo
+- Se cobra **aparte** de los tokens: Anthropic cobra USD 10 cada 1.000 búsquedas, Google
+  USD 14 cada 1.000. OpenAI no cobra la búsqueda aparte, queda incluida en el precio del modelo.
+- Además de ese cargo, cada resultado que trae la búsqueda suma tokens de contexto, como
+  cualquier otro texto que lea el bot.
+- El costo de las búsquedas se refleja en el costo estimado del bot (sección 5.3), igual que
+  el resto del consumo.
+
+### 11.2 El riesgo: una sola pregunta puede disparar varias búsquedas
+El bot puede decidir buscar más de una vez para contestar una misma pregunta (busca algo, no le
+alcanza, busca de nuevo). Eso multiplica tanto el cargo por búsqueda como los tokens de contexto.
+
+- **Anthropic** es el único proveedor con un tope real: **Tope de búsquedas por respuesta**, en
+  Publicación. Vacío o 0 usa el default (3). Anthropic respeta ese número.
+- **Google y OpenAI no tienen forma de limitarlo** desde acá. El único freno en esos casos es el
+  límite mensual de tokens del bot (sección 5.2).
+- **En OpenAI además hace falta el modelo correcto:** la búsqueda solo funciona con modelos
+  pensados para eso (ej. `gpt-5-search-api`). Con gpt-4o o gpt-4o-mini el toggle queda activado
+  pero no tiene ningún efecto — el bot no busca.
+
+Para un bot con información sensible al costo, conviene activarlo primero en un bot de prueba
+con Anthropic (por el tope real) antes de usarlo en un bot de producción.
+
+---
+
+## 12. Accesos: quién ve cada bot (admin)
 
 Pestaña **Acceso**:
 - El **dueño** (quien creó el bot) y los **admin / superadmin** ven siempre el bot.
@@ -300,7 +333,7 @@ Pestaña **Acceso**:
 
 ---
 
-## 12. Cómo se comporta el bot (importante para configurar bien)
+## 13. Cómo se comporta el bot (importante para configurar bien)
 
 - **Responde con lo que dicen sus documentos** y, si no encuentra la información, lo dice:
   *"No tengo información sobre eso en mis documentos."* No debe inventar datos (fechas,
@@ -317,7 +350,7 @@ Pestaña **Acceso**:
 
 ---
 
-## 13. Estadísticas y conversaciones
+## 14. Estadísticas y conversaciones
 
 - **Estadísticas (por bot):** conversaciones, mensajes, tokens usados (desglosados), costo estimado en
   USD y consumo por modelo y por día.
@@ -328,7 +361,7 @@ Pestaña **Acceso**:
 
 ---
 
-## 14. Embed: publicar el bot en un sitio
+## 15. Embed: publicar el bot en un sitio
 
 Pestaña **Embed** (operador y superior):
 - **Script del widget:** burbuja flotante para pegar en cualquier sitio web.
@@ -340,7 +373,7 @@ y el chat solo funciona desde los dominios permitidos por esa key.
 
 ---
 
-## 15. Logos institucionales (superadmin)
+## 16. Logos institucionales (superadmin)
 
 En **Proveedores de IA → Marca institucional**:
 - **Logo del Gobierno:** aparece en el encabezado de todos los bots.
@@ -349,7 +382,7 @@ En **Proveedores de IA → Marca institucional**:
 
 ---
 
-## 16. Usuarios y proveedores globales (superadmin)
+## 17. Usuarios y proveedores globales (superadmin)
 
 - **Usuarios:** crear usuarios con su rol, editar datos y rol.
 - **Proveedores de IA:** claves globales por proveedor, usadas para actualizar la lista de
@@ -358,7 +391,7 @@ En **Proveedores de IA → Marca institucional**:
 
 ---
 
-## 17. Buenas prácticas
+## 18. Buenas prácticas
 
 1. Cargar primero los documentos y luego probar el bot con preguntas reales antes de publicarlo.
 2. Escribir la descripción de cada archivo descargable pensando en lo que va a preguntar el usuario.
@@ -370,7 +403,7 @@ En **Proveedores de IA → Marca institucional**:
 
 ---
 
-## 18. Limitaciones conocidas
+## 19. Limitaciones conocidas
 
 - El bot responde según sus documentos y su configuración: no reemplaza la verificación humana
   en trámites o decisiones formales. Para eso está el contacto humano.

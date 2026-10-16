@@ -114,6 +114,13 @@ class Chatbot(Base):
     # en la base de conocimiento del bot ni queda disponible para otras conversaciones.
     allow_user_uploads: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Búsqueda en internet (tool del proveedor, no una integración propia). Solo Anthropic
+    # respeta un tope de búsquedas por respuesta (web_search_max_uses, None = usa el default del
+    # proveedor); en Google y OpenAI el campo se guarda pero no hay forma de hacerlo cumplir —
+    # ver ai_service.py. El único freno real ahí es el límite mensual de tokens del bot.
+    allow_web_search: Mapped[bool] = mapped_column(Boolean, default=False)
+    web_search_max_uses: Mapped[Optional[int]] = mapped_column(Integer)
+
     # RAG Config
     top_k: Mapped[int] = mapped_column(Integer, default=5)
     similarity_threshold: Mapped[float] = mapped_column(Float, default=0.7)
@@ -140,6 +147,7 @@ class Chatbot(Base):
     total_prompt_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
     total_completion_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
     total_embedding_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    total_web_searches: Mapped[int] = mapped_column(BigInteger, default=0)
     total_cost_usd: Mapped[float] = mapped_column(Numeric(18, 10, asdecimal=False), default=0)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -253,6 +261,7 @@ class Message(Base):
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)  # prompt + completion + embeddings del turno
     embedding_tokens: Mapped[int] = mapped_column(Integer, default=0)  # embedding de la pregunta
+    web_searches: Mapped[int] = mapped_column(Integer, default=0)  # búsquedas en internet de esta respuesta
     cost_usd: Mapped[Optional[float]] = mapped_column(Numeric(14, 10, asdecimal=False))  # NULL = modelo sin precio cargado
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
 

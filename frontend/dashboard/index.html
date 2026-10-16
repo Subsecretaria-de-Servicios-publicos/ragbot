@@ -690,6 +690,16 @@
               <span>Permitir subir un PDF en el chat para analizarlo</span>
             </label>
             <div class="form-hint">El usuario puede adjuntar un PDF (hasta 8MB) y preguntar sobre su contenido. Se analiza solo para esa conversación puntual: no se guarda en la base de conocimiento del bot ni queda disponible para otros usuarios.</div>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:14px">
+              <input type="checkbox" id="cfg-allow-web-search" onchange="document.getElementById('cfg-web-search-opts').style.display = this.checked ? '' : 'none'">
+              <span>Permitir búsqueda en internet</span>
+            </label>
+            <div class="form-hint">El bot puede buscar en internet antes de responder (lo hace el proveedor de IA, no es una integración nuestra). <b>Cobra aparte de los tokens</b> — se suma al costo estimado del bot. Importante: solo Anthropic respeta un tope de búsquedas por respuesta; en Google y OpenAI el bot puede buscar varias veces en una sola respuesta sin que haya forma de limitarlo desde acá. En OpenAI además solo funciona si el modelo elegido es uno de búsqueda (ej. gpt-5-search-api) — con gpt-4o/gpt-4o-mini este toggle no tiene efecto.</div>
+            <div id="cfg-web-search-opts" style="display:none;margin-top:10px">
+              <label class="form-label">Tope de búsquedas por respuesta</label>
+              <input class="form-input" id="cfg-web-search-max-uses" type="number" min="1" max="20" placeholder="3 (default)" style="max-width:160px">
+              <div class="form-hint">Solo lo hace cumplir Anthropic. Vacío = usa el default (3).</div>
+            </div>
           </div>
         </div>
         </div><!-- /cfg-admin-panels -->
@@ -1378,7 +1388,7 @@ let currentUser = null;
 let currentBotId = null;
 
 const MODELS = {
-  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+  openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'gpt-5-search-api'],
   anthropic: ['claude-sonnet-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-haiku-4-5-20251001'],
   google: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.1-flash-lite', 'gemini-3.5-flash-lite', 'gemini-3.5-flash'],
   ollama: ['llama3', 'llama3:70b', 'mistral', 'mixtral', 'codellama'],
@@ -2228,6 +2238,9 @@ async function loadBotConfig(botId) {
     document.getElementById('cfg-threshold').value = bot.similarity_threshold || 0.7;
     document.getElementById('cfg-is-public').checked = !!bot.is_public;
     document.getElementById('cfg-allow-uploads').checked = !!bot.allow_user_uploads;
+    document.getElementById('cfg-allow-web-search').checked = !!bot.allow_web_search;
+    document.getElementById('cfg-web-search-max-uses').value = bot.web_search_max_uses || '';
+    document.getElementById('cfg-web-search-opts').style.display = bot.allow_web_search ? '' : 'none';
     renderAvatarPreview(bot.bot_avatar_url);
     renderOrgLogoPreview(bot.org_logo_url);
     renderKeyAndUsage(bot);
@@ -2445,6 +2458,8 @@ async function saveBotConfig() {
     similarity_threshold: parseFloat(document.getElementById('cfg-threshold').value),
     is_public: document.getElementById('cfg-is-public').checked,
     allow_user_uploads: document.getElementById('cfg-allow-uploads').checked,
+    allow_web_search: document.getElementById('cfg-allow-web-search').checked,
+    web_search_max_uses: parseInt(document.getElementById('cfg-web-search-max-uses').value) || 0,  // 0 = sin tope explícito (usa el default)
     monthly_token_limit: parseInt(document.getElementById('cfg-token-limit').value) || 0,  // 0 = sin límite
   });
   try {

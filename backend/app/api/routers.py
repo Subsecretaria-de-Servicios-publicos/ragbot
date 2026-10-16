@@ -152,6 +152,20 @@ class ChatbotCreate(BaseModel):
     contact_email: Optional[str] = None  # contacto para intervención humana
     contact_whatsapp: Optional[str] = None  # ídem, con código de país (se guardan solo dígitos)
     allow_user_uploads: Optional[bool] = None  # permite subir un PDF en el chat para analizarlo (solo admin/owner)
+    allow_web_search: Optional[bool] = None  # tool de búsqueda en internet del proveedor (no todos lo soportan igual)
+    web_search_max_uses: Optional[int] = None  # tope de búsquedas por respuesta; solo Anthropic lo hace cumplir
+
+    @field_validator("web_search_max_uses")
+    @classmethod
+    def _check_web_search_max_uses(cls, v):
+        # 0 = "sin tope explícito" (usa el default del proveedor): se guarda tal cual, igual que
+        # monthly_token_limit — si lo convirtiéramos a None acá, el PATCH lo descartaría
+        # (exclude_none) y nunca se podría volver a poner en blanco un valor ya guardado.
+        if v is None or v == 0:
+            return v
+        if v < 1 or v > 20:
+            raise ValueError("El tope de búsquedas tiene que estar entre 1 y 20")
+        return v
 
     @field_validator("suggested_questions")
     @classmethod
@@ -210,6 +224,20 @@ class ChatbotUpdate(BaseModel):
     contact_email: Optional[str] = None
     contact_whatsapp: Optional[str] = None
     allow_user_uploads: Optional[bool] = None
+    allow_web_search: Optional[bool] = None
+    web_search_max_uses: Optional[int] = None
+
+    @field_validator("web_search_max_uses")
+    @classmethod
+    def _check_web_search_max_uses(cls, v):
+        # 0 = "sin tope explícito" (usa el default del proveedor): se guarda tal cual, igual que
+        # monthly_token_limit — si lo convirtiéramos a None acá, el PATCH lo descartaría
+        # (exclude_none) y nunca se podría volver a poner en blanco un valor ya guardado.
+        if v is None or v == 0:
+            return v
+        if v < 1 or v > 20:
+            raise ValueError("El tope de búsquedas tiene que estar entre 1 y 20")
+        return v
 
     @field_validator("suggested_questions")
     @classmethod
@@ -451,12 +479,15 @@ async def get_chatbot(bot_id: str, payload: dict = Depends(get_current_user_payl
         "contact_email": bot.contact_email or "",
         "contact_whatsapp": bot.contact_whatsapp or "",
         "allow_user_uploads": bot.allow_user_uploads,
+        "allow_web_search": bot.allow_web_search,
+        "web_search_max_uses": bot.web_search_max_uses,
         "total_conversations": bot.total_conversations,
         "total_messages": bot.total_messages,
         "total_tokens_used": bot.total_tokens_used,
         "total_prompt_tokens": bot.total_prompt_tokens or 0,
         "total_completion_tokens": bot.total_completion_tokens or 0,
         "total_embedding_tokens": bot.total_embedding_tokens or 0,
+        "total_web_searches": bot.total_web_searches or 0,
         "total_cost_usd": float(bot.total_cost_usd or 0),
         "usage_month_cost_usd": float(bot.usage_month_cost_usd or 0) if bot.usage_month == current_month() else 0.0,
         "created_at": bot.created_at.isoformat(),
@@ -909,7 +940,7 @@ ai_providers_router = APIRouter(prefix="/admin/ai-providers", tags=["ai-provider
 
 # Fallback curado: se usa si nunca se hizo un "actualizar modelos" (o si falla)
 CURATED_MODELS = {
-    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo", "gpt-5-search-api"],
     "anthropic": ["claude-sonnet-5", "claude-opus-5-5", "claude-fable-5-1", "claude-haiku-4-5-20251001"],
     "google": ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.5-flash"],
     "ollama": ["llama3", "llama3:70b", "mistral", "mixtral", "codellama"],
@@ -2989,11 +3020,12 @@ async def bot_usage(bot_id: str, days: int = 30, payload: dict = Depends(require
         func.coalesce(func.sum(Message.completion_tokens), 0), func.coalesce(func.sum(Message.embedding_tokens), 0),
         func.coalesce(func.sum(Message.total_tokens), 0), func.coalesce(func.sum(Message.cost_usd), 0),
         func.count(Message.id).filter(Message.cost_usd.is_(None)),
+        func.coalesce(func.sum(Message.web_searches), 0),
     )
     def row(r):
         return {"messages": r[0], "prompt_tokens": int(r[1]), "completion_tokens": int(r[2]),
                 "embedding_tokens": int(r[3]), "total_tokens": int(r[4]), "cost_usd": float(r[5]),
-                "unpriced_messages": r[6]}
+                "unpriced_messages": r[6], "web_searches": int(r[7])}
 
     attributed = (await db.execute(select(*sums).select_from(Message).join(
         Conversation, Message.conversation_id == Conversation.id)
@@ -3015,6 +3047,7 @@ async def bot_usage(bot_id: str, days: int = 30, payload: dict = Depends(require
             "prompt_tokens": bot.total_prompt_tokens or 0,
             "completion_tokens": bot.total_completion_tokens or 0,
             "embedding_tokens": bot.total_embedding_tokens or 0,
+            "web_searches": bot.total_web_searches or 0,
             "cost_usd": float(bot.total_cost_usd or 0),
         },
         "conversations_attributed": attributed_d,

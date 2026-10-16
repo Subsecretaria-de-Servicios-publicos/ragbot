@@ -14,7 +14,7 @@ from app.services.ai_service import AIService, ChatMessage
 from app.services.rag_service import RAGService
 from app.core.config import settings
 from app.services.bot_keys import require_bot_api_key, enforce_monthly_limit, record_usage
-from app.services.pricing import llm_cost_usd, estimate_tokens
+from app.services.pricing import llm_cost_usd, estimate_tokens, web_search_cost_usd
 
 logger = structlog.get_logger()
 
@@ -285,6 +285,8 @@ debe ser EXACTAMENTE: "No tengo información sobre eso en mis documentos.\""""
             max_tokens=chatbot.max_tokens,
             api_key=bot_api_key,
             base_url=base_url_override,
+            web_search=chatbot.allow_web_search,
+            web_search_max_uses=chatbot.web_search_max_uses,
         )
 
         # Consumo del turno. Si el proveedor no informó tokens (respuesta sin usage), se estiman
@@ -295,10 +297,12 @@ debe ser EXACTAMENTE: "No tengo información sobre eso en mis documentos.\""""
             prompt_tok = estimate_tokens([m.content for m in messages])
             completion_tok = estimate_tokens([ai_response.content])
         embedding_tok = self.rag.last_embedding_tokens
+        searches = ai_response.web_searches
         llm_cost = llm_cost_usd(chatbot.ai_provider.value, chatbot.ai_model, prompt_tok, completion_tok,
                                 ai_response.cached_prompt_tokens)
+        search_cost = web_search_cost_usd(chatbot.ai_provider.value, searches)
         turn_tokens = prompt_tok + completion_tok + embedding_tok
-        turn_cost = None if llm_cost is None else llm_cost + self.rag.last_embedding_cost
+        turn_cost = None if llm_cost is None else llm_cost + self.rag.last_embedding_cost + search_cost
 
         # 6. Parsear respuesta JSON del LLM
         answer_text, sources, confidence = self._parse_json_response(ai_response.content)
@@ -329,6 +333,7 @@ debe ser EXACTAMENTE: "No tengo información sobre eso en mis documentos.\""""
             prompt_tokens=prompt_tok,
             completion_tokens=completion_tok,
             embedding_tokens=embedding_tok,
+            web_searches=searches,
             total_tokens=turn_tokens,
             cost_usd=turn_cost,
             latency_ms=total_ms,
@@ -352,7 +357,7 @@ debe ser EXACTAMENTE: "No tengo información sobre eso en mis documentos.\""""
         )
         await record_usage(
             self.db, chatbot_id,
-            prompt=prompt_tok, completion=completion_tok, embedding=embedding_tok,
+            prompt=prompt_tok, completion=completion_tok, embedding=embedding_tok, web_searches=searches,
             cost_usd=(turn_cost or 0.0),
         )
         await self.db.commit()

@@ -33,6 +33,7 @@ class AIResponse:
     latency_ms: int
     cached_prompt_tokens: int = 0  # parte de prompt_tokens servida desde caché del proveedor (cobra menos)
     truncated: bool = False  # True si el proveedor cortó la respuesta por el límite de tokens (max_tokens)
+    web_searches: int = 0  # búsquedas en internet que hizo el proveedor para esta respuesta (0 si no se pidió o no aplica)
 
 
 # ─── Base Provider ────────────────────────────────────────────
@@ -45,6 +46,8 @@ class BaseAIProvider(ABC):
         temperature: float = 0.7,
         max_tokens: int = 1000,
         stream: bool = False,
+        web_search: bool = False,
+        web_search_max_uses: Optional[int] = None,
     ) -> AIResponse:
         pass
 
@@ -55,9 +58,20 @@ class OpenAIProvider(BaseAIProvider):
         from openai import AsyncOpenAI
         self.client = AsyncOpenAI(api_key=api_key or settings.OPENAI_API_KEY)
 
-    async def chat(self, messages, model="gpt-4o-mini", temperature=0.7, max_tokens=1000, stream=False) -> AIResponse:
+    # Modelos de Chat Completions con búsqueda en internet integrada. A diferencia de Anthropic
+    # y Google, OpenAI NO tiene un "tool" que se le agregue a cualquier modelo: la búsqueda es
+    # una característica del modelo en sí. Si el bot usa gpt-4o/gpt-4o-mini con allow_web_search
+    # activado, no hay nada que mandarle a la API — hay que elegir uno de estos modelos.
+    SEARCH_MODELS = {"gpt-5-search-api", "gpt-4o-search-preview", "gpt-4o-mini-search-preview"}
+
+    async def chat(self, messages, model="gpt-4o-mini", temperature=0.7, max_tokens=1000, stream=False,
+                   web_search=False, web_search_max_uses=None) -> AIResponse:
         start = time.monotonic()
         formatted = [{"role": m.role, "content": m.content} for m in messages]
+
+        if web_search and model not in self.SEARCH_MODELS:
+            logger.warning("openai_web_search_unsupported_model", model=model,
+                           hint="usar gpt-5-search-api (u otro modelo *-search-*) para que busque de verdad")
 
         response = await self.client.chat.completions.create(
             model=model,
@@ -81,6 +95,9 @@ class OpenAIProvider(BaseAIProvider):
             latency_ms=latency_ms,
             cached_prompt_tokens=cached,
             truncated=response.choices[0].finish_reason == "length",
+            # OpenAI no informa cuántas búsquedas hizo en Chat Completions: el costo de la
+            # búsqueda ya viene mezclado en los tokens de la respuesta, no se cobra aparte.
+            web_searches=0,
         )
 
 
@@ -90,7 +107,13 @@ class AnthropicProvider(BaseAIProvider):
         import anthropic
         self.client = anthropic.AsyncAnthropic(api_key=api_key or settings.ANTHROPIC_API_KEY)
 
-    async def chat(self, messages, model="claude-haiku-4-5-20251001", temperature=0.7, max_tokens=1000, stream=False) -> AIResponse:
+    # Tope por defecto si el bot tiene búsqueda activada pero no fijó uno propio: ver NOTE en
+    # bot_keys/routers — sin esto, el modelo podría encadenar búsquedas sin límite en una sola
+    # respuesta (cada una se cobra aparte, además de los tokens que agrega al contexto).
+    DEFAULT_WEB_SEARCH_MAX_USES = 3
+
+    async def chat(self, messages, model="claude-haiku-4-5-20251001", temperature=0.7, max_tokens=1000, stream=False,
+                   web_search=False, web_search_max_uses=None) -> AIResponse:
         start = time.monotonic()
 
         # Separar system message
@@ -110,12 +133,25 @@ class AnthropicProvider(BaseAIProvider):
         )
         if system_content:
             kwargs["system"] = system_content
+        if web_search:
+            kwargs["tools"] = [{
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": web_search_max_uses or self.DEFAULT_WEB_SEARCH_MAX_USES,
+            }]
 
         response = await self.client.messages.create(**kwargs)
         latency_ms = int((time.monotonic() - start) * 1000)
 
+        # Con búsqueda activada la respuesta trae varios bloques (texto, la búsqueda en sí, los
+        # resultados, más texto) — el texto final es la concatenación de los bloques de tipo
+        # "text", no solo el primero.
+        text = "".join(b.text for b in response.content if b.type == "text")
+        server_tool_use = getattr(response.usage, "server_tool_use", None)
+        searches = getattr(server_tool_use, "web_search_requests", 0) if server_tool_use else 0
+
         return AIResponse(
-            content=response.content[0].text,
+            content=text,
             model=model,
             provider="anthropic",
             prompt_tokens=response.usage.input_tokens,
@@ -123,6 +159,7 @@ class AnthropicProvider(BaseAIProvider):
             total_tokens=response.usage.input_tokens + response.usage.output_tokens,
             latency_ms=latency_ms,
             truncated=response.stop_reason == "max_tokens",
+            web_searches=searches or 0,
         )
 
 
@@ -148,7 +185,11 @@ class GoogleProvider(BaseAIProvider):
         retry=retry_if_exception_type(GoogleRateLimited),
         reraise=True
     )
-    async def chat(self, messages, model="gemini-2.5-flash-lite", temperature=0.7, max_tokens=1000, stream=False) -> AIResponse:
+    async def chat(self, messages, model="gemini-2.5-flash-lite", temperature=0.7, max_tokens=1000, stream=False,
+                   web_search=False, web_search_max_uses=None) -> AIResponse:
+        # web_search_max_uses no se usa acá: Google no tiene un parámetro documentado para
+        # limitar cuántas búsquedas hace el modelo por respuesta (a diferencia de Anthropic).
+        # El único freno real para este proveedor es el límite mensual de tokens del bot.
         start = time.monotonic()
 
         # Convertir mensajes al formato Gemini
@@ -168,14 +209,18 @@ class GoogleProvider(BaseAIProvider):
         full_prompt = ("\n".join(system_parts) + "\n\n" + last_user).strip() if system_parts else last_user
         contents = (history[:-1] if history else []) + [{"role": "user", "parts": [{"text": full_prompt}]}]
 
+        body = {
+            "contents": contents,
+            "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
+        }
+        if web_search:
+            body["tools"] = [{"google_search": {}}]
+
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(
                 f"{GOOGLE_API_BASE}/models/{model}:generateContent",
                 headers={"x-goog-api-key": self.api_key},
-                json={
-                    "contents": contents,
-                    "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
-                },
+                json=body,
             )
         if resp.status_code == 429:
             raise GoogleRateLimited("Google API 429 (cuota o rate limit)")
@@ -208,6 +253,8 @@ class GoogleProvider(BaseAIProvider):
             latency_ms=latency_ms,
             cached_prompt_tokens=usage.get("cachedContentTokenCount", 0),
             truncated=(candidates[0].get("finishReason") == "MAX_TOKENS") if candidates else False,
+            # groundingMetadata.webSearchQueries: una entrada por cada búsqueda que hizo el modelo.
+            web_searches=len(((candidates[0].get("groundingMetadata") or {}).get("webSearchQueries") or [])) if candidates else 0,
         )
 
 
@@ -218,7 +265,9 @@ class OllamaProvider(BaseAIProvider):
         self.base_url = base_url or settings.OLLAMA_BASE_URL
         self.client = httpx.AsyncClient(timeout=120)
 
-    async def chat(self, messages, model="llama3", temperature=0.7, max_tokens=1000, stream=False) -> AIResponse:
+    async def chat(self, messages, model="llama3", temperature=0.7, max_tokens=1000, stream=False,
+                   web_search=False, web_search_max_uses=None) -> AIResponse:
+        # Ollama corre modelos locales: no hay búsqueda en internet posible acá.
         start = time.monotonic()
         formatted = [{"role": m.role, "content": m.content} for m in messages]
 
@@ -277,6 +326,8 @@ class AIService:
         max_tokens: int = 1000,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        web_search: bool = False,
+        web_search_max_uses: Optional[int] = None,
     ) -> AIResponse:
         # Reintentos genéricos para errores temporales (red, timeouts, etc.)
         # El proveedor Google tiene sus propios reintentos específicos para cuotas.
@@ -286,7 +337,8 @@ class AIService:
             # una instancia nueva en vez de usar el singleton cacheado (que sigue sirviendo
             # a bots que no configuraron nada y usan las credenciales de .env).
             p = cls._build_provider(provider, api_key, base_url) if (api_key or base_url) else cls.get_provider(provider)
-            return await p.chat(messages, model=model, temperature=temperature, max_tokens=max_tokens)
+            return await p.chat(messages, model=model, temperature=temperature, max_tokens=max_tokens,
+                                web_search=web_search, web_search_max_uses=web_search_max_uses)
 
         try:
             return await _call()

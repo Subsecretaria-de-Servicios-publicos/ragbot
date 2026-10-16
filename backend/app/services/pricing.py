@@ -43,6 +43,14 @@ EMBEDDING_PRICES: dict[tuple[str, str], float] = {
     ("google", "gemini-embedding-001"): 0.15,
 }
 
+# USD / 1000 búsquedas en internet. Verificado el 15/10/2026 contra la doc oficial de cada uno.
+# OpenAI no tiene entrada: su búsqueda es una característica del modelo (gpt-5-search-api y
+# similares), no un cargo aparte — ya está incluida en el precio por token de ese modelo.
+WEB_SEARCH_PRICES: dict[str, float] = {
+    "anthropic": 10.00,
+    "google": 14.00,
+}
+
 LOCAL_PROVIDERS = {"ollama", "sentence_transformers"}
 
 
@@ -73,6 +81,18 @@ def llm_cost_usd(provider: str, model: str, prompt_tokens: int, completion_token
         cached_cost = cached * price_cached
         uncached = prompt_tokens - cached
     return (uncached * price_in + cached_cost + completion_tokens * price_out) / 1_000_000
+
+
+def web_search_cost_usd(provider: str, searches: int) -> float:
+    """Costo estimado de las búsquedas en internet de una respuesta. A diferencia de
+    llm_cost_usd/embedding_cost_usd nunca devuelve None: un proveedor sin precio cargado acá
+    (OpenAI) es porque ya está incluido en el token, no porque falte cargarlo."""
+    if not searches or provider in LOCAL_PROVIDERS:
+        return 0.0
+    price = WEB_SEARCH_PRICES.get(provider)
+    if price is None:
+        return 0.0
+    return searches * price / 1000
 
 
 def embedding_cost_usd(provider: str, model: str, tokens: int) -> Optional[float]:

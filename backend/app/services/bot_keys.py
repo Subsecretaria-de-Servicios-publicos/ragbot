@@ -65,12 +65,14 @@ def enforce_monthly_limit(bot: Chatbot) -> None:
 
 
 async def record_usage(db: AsyncSession, bot_id: str, *, prompt: int = 0, completion: int = 0,
-                       embedding: int = 0, cost_usd: float = 0.0) -> None:
+                       embedding: int = 0, web_searches: int = 0, cost_usd: float = 0.0) -> None:
     """Suma el consumo al bot: totales históricos (desglosados), contadores del mes y costo estimado.
-    El límite mensual cuenta todos los tokens (entrada + salida + embeddings). Atómico; reinicia al
-    cambiar de mes. Dispara los avisos del 80% y 100% una sola vez por mes y nivel."""
+    El límite mensual cuenta los tokens (entrada + salida + embeddings) — las búsquedas en internet
+    no suman tokens propios (el proveedor ya las cuenta dentro del prompt), solo costo aparte.
+    Atómico; reinicia al cambiar de mes. Dispara los avisos del 80% y 100% una sola vez por mes y nivel."""
     month = current_month()
     tokens = int(prompt or 0) + int(completion or 0) + int(embedding or 0)
+    searches = int(web_searches or 0)
     cost = float(cost_usd or 0.0)
     row = (await db.execute(text("""
         UPDATE chatbots SET
@@ -82,11 +84,12 @@ async def record_usage(db: AsyncSession, bot_id: str, *, prompt: int = 0, comple
             total_prompt_tokens    = total_prompt_tokens + :p,
             total_completion_tokens = total_completion_tokens + :o,
             total_embedding_tokens = total_embedding_tokens + :e,
+            total_web_searches     = total_web_searches + :w,
             total_cost_usd         = total_cost_usd + :c
         WHERE id = :id
         RETURNING name, usage_month_tokens, usage_alert_level, monthly_token_limit
     """), {"m": month, "t": tokens, "p": int(prompt or 0), "o": int(completion or 0),
-           "e": int(embedding or 0), "c": cost, "id": bot_id})).one()
+           "e": int(embedding or 0), "w": searches, "c": cost, "id": bot_id})).one()
     used, level, limit = row.usage_month_tokens, row.usage_alert_level, row.monthly_token_limit
     if not limit:
         return
