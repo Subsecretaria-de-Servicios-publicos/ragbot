@@ -2105,11 +2105,11 @@ function esc(s) {{
 // Corre DESPUÉS de esc(), así solo linkea texto ya escapado. Es UN solo replace con alternativas
 // (markdown | URL | correo | teléfono): un trozo ya linkeado no se vuelve a linkear adentro.
 // Una URL relativa ("/static/...") se resuelve con API, igual que bot_avatar_url.
-const LINK_RE = /\[([^\[\]]+)\]\((\/[^\s()]+|https?:\/\/[^\s()]+)\)|(https?:\/\/[^\s<>()]+)|([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{{2,}})|(\(?\+?\d[\d\s().-]{{7,}}\d)/g;
+const LINK_RE = /\[([^\[\]]+)\]\((\/[^\s()]+|(?:https?:\/\/|tel:|mailto:)[^\s()]+)\)|(https?:\/\/[^\s<>()]+)|([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{{2,}})|(\(?\+?\d[\d\s().-]{{7,}}\d)/g;
 function linkify(escapedHtml) {{
   const a = (href, text) => `<a href="${{href}}" target="_blank" rel="noopener">${{text}}</a>`;
   return escapedHtml.replace(LINK_RE, (m, mdText, mdUrl, url, email, phone, offset, whole) => {{
-    if (mdUrl) return a(mdUrl.startsWith("/") ? API + mdUrl : mdUrl, mdText);
+    if (mdUrl) return a(mdUrl.startsWith("/") ? API + mdUrl : mdUrl, mdText);  // tel:/mailto:/https: tal cual; nunca javascript: (el regex no lo acepta)
     if (url) {{
       // la puntuación y las comillas escapadas del final de la oración no son parte del link
       const clean = url.replace(/(?:&quot;|&#39;|&gt;|[.,;:!?])+$/, "");
@@ -2125,6 +2125,16 @@ function linkify(escapedHtml) {{
     }}
     return m;
   }});
+}}
+
+// Negrita estilo markdown/WhatsApp (**texto** y *texto*) y viñetas "* " al inicio de línea. Corre
+// sobre el HTML ya escapado y linkeado: los hrefs no llevan "*", y exigir un carácter no espacio
+// pegado a cada asterisco evita confundir la viñeta "* " con una apertura de negrita.
+function fmtText(html) {{
+  return html
+    .replace(/(^|\\n)[*-] /g, "$1• ")
+    .replace(/(^|[^\w*])\*\*([^\s*](?:[^*\\n]*[^\s*])?)\*\*/g, "$1<strong>$2</strong>")
+    .replace(/(^|[^\w*])\*([^\s*](?:[^*\\n]*[^\s*])?)\*/g, "$1<strong>$2</strong>");
 }}
 
 // Chips de contacto inline, debajo de un mensaje puntual donde el bot no encontró la
@@ -2146,7 +2156,7 @@ function addMsg(role, content, sources, suggestContact) {{
   const d = document.createElement("div");
   d.className = "msg " + role;
   d.innerHTML = `<div class="msg-av">${{role==="bot"?"{avatar_js}":"👤"}}</div>
-    <div class="msg-content"><div class="bubble">${{linkify(esc(content)).replace(/\\n/g,"<br>")}}${{srcs?`<div class="sources">${{srcs}}</div>`:""}}</div>
+    <div class="msg-content"><div class="bubble">${{fmtText(linkify(esc(content))).replace(/\\n/g,"<br>")}}${{srcs?`<div class="sources">${{srcs}}</div>`:""}}</div>
     <div class="msg-time">${{time}}</div>${{contact}}</div>`;
   m.appendChild(d);
   m.scrollTop = m.scrollHeight;
