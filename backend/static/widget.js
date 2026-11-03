@@ -882,16 +882,39 @@
                .replace(/"/g,'&quot;').replace(/\n/g,'<br>');
     }
 
-    // Texto del bot ya escapado + enlaces markdown [texto](url) convertidos a <a> (para los
-    // recursos descargables que arma el backend). Corre DESPUÉS de escapar, así solo linkea
-    // texto ya seguro; una URL relativa ("/static/...") se resuelve con apiUrl, igual que
-    // bot_avatar_url — necesario para que el link funcione embebido en un sitio de terceros.
+    // Texto del bot ya escapado y con formato: enlaces markdown [texto](url) (recursos descargables
+    // que arma el backend, tel:, mailto:), URLs sueltas, correos, teléfonos/WhatsApp, negrita
+    // (*x*, **x**) y viñetas. Corre DESPUÉS de escapar, así solo linkea texto ya seguro; una URL
+    // relativa ("/static/...") se resuelve con apiUrl, igual que bot_avatar_url — necesario para
+    // que el link funcione embebido en un sitio de terceros. Misma lógica que linkify/fmtText de
+    // la página de chat (routers.py): un solo replace con alternativas, para no linkear dos veces.
     _renderMessageContent(content) {
-      const escaped = this._escapeHtml(content);
-      return escaped.replace(/\[([^\[\]]+)\]\((\/[^\s()]+|https?:\/\/[^\s()]+)\)/g, (m, text, url) => {
-        const href = url.startsWith('/') ? this.config.apiUrl + url : url;
-        return `<a href="${href}" target="_blank" rel="noopener">${text}</a>`;
-      });
+      const LINK_RE = /\[([^\[\]]+)\]\((\/[^\s()]+|(?:https?:\/\/|tel:|mailto:)[^\s()]+)\)|(https?:\/\/[^\s<>()]+)|([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})|(\(?\+?\d[\d\s().-]{7,}\d)/g;
+      const a = (href, text) => `<a href="${href}" target="_blank" rel="noopener">${text}</a>`;
+      // _escapeHtml deja los saltos de línea como <br>; se vuelven \n para formatear por línea
+      const escaped = this._escapeHtml(content).replace(/<br>/g, '\n');
+      return escaped
+        .replace(LINK_RE, (m, mdText, mdUrl, url, email, phone, offset, whole) => {
+          if (mdUrl) return a(mdUrl.startsWith('/') ? this.config.apiUrl + mdUrl : mdUrl, mdText);
+          if (url) {
+            // la puntuación y las comillas escapadas del final de la oración no son parte del link
+            const clean = url.replace(/(?:&quot;|&#39;|&gt;|[.,;:!?])+$/, '');
+            return a(clean, clean) + url.slice(clean.length);
+          }
+          if (email) return a('mailto:' + email, email);
+          if (phone) {
+            const digits = phone.replace(/\D/g, '');
+            if (digits.length < 9 || digits.length > 15) return m;  // no es un teléfono (fechas, rangos, etc.)
+            const wa = /(whats\s?app|wsp|wpp)/i.test(whole.slice(Math.max(0, offset - 40), offset));
+            if (wa && phone.includes('+')) return a('https://wa.me/' + digits, phone);
+            return a('tel:' + (phone.includes('+') ? '+' : '') + digits, phone);
+          }
+          return m;
+        })
+        .replace(/(^|\n)[*-] /g, '$1• ')
+        .replace(/(^|[^\w*])\*\*([^\s*](?:[^*\n]*[^\s*])?)\*\*/g, '$1<strong>$2</strong>')
+        .replace(/(^|[^\w*])\*([^\s*](?:[^*\n]*[^\s*])?)\*/g, '$1<strong>$2</strong>')
+        .replace(/\n/g, '<br>');
     }
   }
 
