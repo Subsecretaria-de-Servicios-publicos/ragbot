@@ -2100,13 +2100,30 @@ function esc(s) {{
   ));
 }}
 
-// Enlaces markdown [texto](url) convertidos a <a> (para los recursos descargables que arma
-// el backend). Corre DESPUÉS de esc(), así solo linkea texto ya escapado. Una URL relativa
-// ("/static/...") se resuelve con API, igual que bot_avatar_url.
+// Convierte en links lo que el bot escribe en el texto: enlaces markdown [texto](url) (los
+// recursos descargables que arma el backend), URLs sueltas, correos y teléfonos/WhatsApp.
+// Corre DESPUÉS de esc(), así solo linkea texto ya escapado. Es UN solo replace con alternativas
+// (markdown | URL | correo | teléfono): un trozo ya linkeado no se vuelve a linkear adentro.
+// Una URL relativa ("/static/...") se resuelve con API, igual que bot_avatar_url.
+const LINK_RE = /\[([^\[\]]+)\]\((\/[^\s()]+|https?:\/\/[^\s()]+)\)|(https?:\/\/[^\s<>()]+)|([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{{2,}})|(\(?\+?\d[\d\s().-]{{7,}}\d)/g;
 function linkify(escapedHtml) {{
-  return escapedHtml.replace(/\[([^\[\]]+)\]\((\/[^\s()]+|https?:\/\/[^\s()]+)\)/g, (m, text, url) => {{
-    const href = url.startsWith("/") ? API + url : url;
-    return `<a href="${{href}}" target="_blank" rel="noopener">${{text}}</a>`;
+  const a = (href, text) => `<a href="${{href}}" target="_blank" rel="noopener">${{text}}</a>`;
+  return escapedHtml.replace(LINK_RE, (m, mdText, mdUrl, url, email, phone, offset, whole) => {{
+    if (mdUrl) return a(mdUrl.startsWith("/") ? API + mdUrl : mdUrl, mdText);
+    if (url) {{
+      // la puntuación y las comillas escapadas del final de la oración no son parte del link
+      const clean = url.replace(/(?:&quot;|&#39;|&gt;|[.,;:!?])+$/, "");
+      return a(clean, clean) + url.slice(clean.length);
+    }}
+    if (email) return a("mailto:" + email, email);
+    if (phone) {{
+      const digits = phone.replace(/\D/g, "");
+      if (digits.length < 9 || digits.length > 15) return m;  // no es un teléfono (fechas, rangos, etc.)
+      const wa = /(whats\s?app|wsp|wpp)/i.test(whole.slice(Math.max(0, offset - 40), offset));
+      if (wa && phone.includes("+")) return a("https://wa.me/" + digits, phone);
+      return a("tel:" + (phone.includes("+") ? "+" : "") + digits, phone);
+    }}
+    return m;
   }});
 }}
 
