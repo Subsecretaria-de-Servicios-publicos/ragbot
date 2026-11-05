@@ -74,7 +74,8 @@ Ejemplo (test):
 ```env
 SOVRA_LOGIN_ENABLED=true
 SOVRA_BASE_URL=https://test-api-sovra.flagonsa.com
-SOVRA_API_KEY=sovra_sk_...            # no la pegues en chats, tickets ni commits
+# La API key no va en chats, tickets ni commits. Comentarios en línea aparte (ver nota de systemd, sección 5).
+SOVRA_API_KEY=sovra_sk_...
 SOVRA_LOGIN_CLAIM=dni
 SOVRA_LOGIN_VCT=EmpleadoPublico
 SOVRA_LOGIN_ISSUER_DID=did:sovra:0x...
@@ -84,10 +85,12 @@ Notas:
 
 - **No hace falta webhook.** El backend consulta el estado a Sovra, así que no se expone ninguna URL
   pública nueva ni hay que tocar nginx/apache.
-- **Límite de intentos por IP:** en producción `TRUST_PROXY_HEADERS` ya está en `true`
-  (`docker-compose.prod.yml`), por lo que el límite se aplica por IP real del cliente. Con esa
-  variable en `false` detrás de un proxy, **todos** compartirían el mismo cupo de 10 intentos/min.
-- Para rotar la API key: crear una nueva en Sovra, actualizar `.env`, reiniciar el backend y revocar la vieja.
+- **Límite de intentos por IP:** `TRUST_PROXY_HEADERS` ya está en `true` en los dos despliegues
+  (`docs/ragbot.service` y `docker-compose.prod.yml`), por lo que el límite se aplica por IP real
+  del cliente. Con esa variable en `false` detrás de un proxy, **todos** compartirían el mismo cupo
+  de 10 intentos/min. El límite usa Redis; si Redis no está disponible no se aplica (mismo criterio
+  que el límite general del backend).
+- Para rotar la API key: crear una nueva en Sovra, actualizar `.env`, reiniciar el backend (`sudo systemctl restart ragbot`) y revocar la vieja.
 
 ---
 
@@ -110,49 +113,84 @@ usuario **todavía no tiene DNI vinculado**; cambiar uno ya cargado lo hace un s
 2. Si corresponde, revocar su credencial en Sovra: impide nuevos ingresos con ella.
 
 **Salida de emergencia.** El login con usuario y contraseña sigue funcionando para todos. Si Sovra
-falla, nadie queda afuera. Para apagar la función: `SOVRA_LOGIN_ENABLED=false` y reiniciar.
+falla, nadie queda afuera. Para apagar la función: `SOVRA_LOGIN_ENABLED=false` y reiniciar el backend.
 
 ---
 
 ## 5. Despliegue
 
-El flujo normal ya hace todo lo necesario:
+### Sin Docker (`deploy-nodocker.sh`, el del servidor actual)
 
 ```bash
 # 1. En el servidor, agregar las variables SOVRA_* a backend/.env  (ver sección 3)
 # 2. Desplegar
-./deploy.sh
+./deploy-nodocker.sh
 ```
 
-- La imagen se reconstruye, así que se instala la dependencia nueva (`segno`, para dibujar el QR).
-- El contenedor ejecuta `alembic upgrade head` al arrancar: aplica la migración `0019_sovra_login`
-  (columna `users.sovra_identifier` y tabla `sovra_login_sessions`). Con `deploy-nodocker.sh` pasa lo mismo.
+El script **no necesitó cambios** para esta función; ya hace todo lo necesario:
+
+| Paso del script | Qué pasa con Sovra ID |
+|---|---|
+| `git pull --ff-only` | Trae el código. El dashboard es HTML estático que Apache sirve desde `frontend/dashboard`: **llega con el pull, sin reiniciar nada** (refrescar con Ctrl+F5 por la caché del navegador). |
+| `pip install -r requirements.txt` | Instala la dependencia nueva `segno` (dibuja el QR). |
+| `alembic upgrade head` | Aplica la migración `0019_sovra_login` (columna `users.sovra_identifier` y tabla `sovra_login_sessions`). |
+| `systemctl restart ragbot` | Reinicia el backend, que lee el `.env` (la unidad usa `EnvironmentFile`). |
+
+**Apache no necesita cambios.** Las rutas nuevas están bajo `/api/v1/auth/…`, que ya se proxea
+completa desde `/ragbot/api/` y `/matriabot/api/` (`docs/apache-ragbot.conf`), y el header
+`X-Poll-Secret` pasa sin configuración extra.
+
+**Cuidado con el formato del `.env`.** La unidad de systemd lo lee con `EnvironmentFile`, que
+**no admite comentarios en la misma línea** que un valor (`SOVRA_LOGIN_VCT=Tipo # comentario` tomaría
+todo como valor). Los comentarios van en líneas aparte, como en `.env.example`.
+
+Si solo se cambió el `.env` (sin código nuevo): `sudo systemctl restart ragbot`.
 
 **Verificar después de desplegar:**
 
 ```bash
-# La migración quedó aplicada
-docker exec ragbot_backend alembic current          # debe mostrar 0019_sovra_login (head)
+# La migración quedó aplicada (debe mostrar 0019_sovra_login (head))
+cd backend && PYTHONPATH=. .venv/bin/alembic current
 
 # El backend ofrece el login con Sovra (true solo si está activado Y configurado)
 curl -s https://subsecretar-ia.salta.gob.ar/matriabot/api/v1/auth/methods
 # → {"password":true,"sovra":true}
+
+# Redis (lo usa el límite de intentos; si no está, el límite simplemente no se aplica)
+systemctl is-active redis-server
 ```
 
 Si `sovra` da `false` con `SOVRA_LOGIN_ENABLED=true`, falta alguna de `SOVRA_BASE_URL`,
-`SOVRA_API_KEY` o `SOVRA_LOGIN_VCT`. Si hay una URL inválida (no `https`), el inicio responde 503 y
-queda el motivo en el log.
+`SOVRA_API_KEY` o `SOVRA_LOGIN_VCT`. Si la URL no es `https`, el inicio responde 503 y queda el
+motivo en el log.
 
-**Prueba de punta a punta recomendada** (primero en test):
+**Varios workers:** la unidad corre uvicorn con `--workers 2`. Es compatible: el estado de cada
+intento vive en la base de datos, no en memoria, y el canje de un solo uso es atómico en SQL.
+
+### Con Docker (`deploy.sh`)
+
+Mismo resultado: `./deploy.sh` reconstruye la imagen (instala `segno`) y el contenedor ejecuta
+`alembic upgrade head` al arrancar. Para verificar:
+
+```bash
+docker exec ragbot_backend alembic current
+curl -s https://subsecretar-ia.salta.gob.ar/matriabot/api/v1/auth/methods
+```
+
+### Prueba de punta a punta recomendada (primero contra el entorno de test de Sovra)
+
 1. Cargar tu DNI en tu usuario (o usar "Vincular Sovra ID").
 2. Cerrar sesión → "Ingresar con Sovra ID" → escanear → deberías entrar con tu rol.
 3. Probar con una credencial de **otro** DNI (sin usuario): debe mostrar el mensaje genérico y
    quedar `no_user_for_identifier` en el log.
 4. Probar con un usuario **desactivado**: mismo mensaje genérico, `user_inactive` en el log.
 
-**Rollback:** `SOVRA_LOGIN_ENABLED=false` y reiniciar. No hace falta revertir la migración (las
-tablas quedan sin uso). Si de verdad se quiere deshacer: `alembic downgrade 0018_web_search`
-(borra la tabla de intentos y la columna del DNI).
+### Rollback
+
+`SOVRA_LOGIN_ENABLED=false` y reiniciar (`sudo systemctl restart ragbot`). No hace falta revertir la
+migración: las tablas quedan sin uso. Si de verdad se quiere deshacer:
+`cd backend && PYTHONPATH=. .venv/bin/alembic downgrade 0018_web_search` (borra la tabla de
+intentos y la columna del DNI).
 
 ---
 
@@ -161,6 +199,9 @@ tablas quedan sin uso). Si de verdad se quiere deshacer: `alembic downgrade 0018
 Los rechazos se explican en el log del backend (nunca en pantalla):
 
 ```bash
+# Sin Docker (systemd)
+sudo journalctl -u ragbot --no-pager | grep -E "sovra_login_(rejected|poll_error|replay)|sovra_link_ok"
+# Con Docker
 docker logs ragbot_backend 2>&1 | grep -E "sovra_login_(rejected|poll_error|replay)|sovra_link_ok"
 ```
 
