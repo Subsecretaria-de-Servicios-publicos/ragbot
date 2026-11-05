@@ -101,6 +101,7 @@
     font-size: 12px; transition: all 0.15s;
   }
   .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
+  .btn-logout.btn-neutral:hover { border-color: var(--accent); color: var(--accent); }  /* acciones que no son salir */
 
   /* ── Main ──────────────────────── */
   .main {
@@ -279,11 +280,13 @@
   /* ── Login Screen ───────────────── */
   #login-screen {
     position: fixed; inset: 0; background: var(--bg);
-    display: flex; align-items: center; justify-content: center;
+    display: flex; align-items: flex-start; justify-content: center;
+    overflow-y: auto; padding: 16px;  /* con el QR el cuadro puede superar la altura de la ventana */
     z-index: 999;
   }
   .login-box {
-    width: 380px; background: var(--bg2);
+    margin: auto;  /* centra, y deja de recortar el borde de arriba cuando no entra */
+    width: 380px; max-width: 100%; background: var(--bg2);
     border: 1px solid var(--border2); border-radius: 14px;
     padding: 36px 32px;
   }
@@ -294,6 +297,16 @@
   .login-error { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.2);
     color: var(--danger); border-radius: 6px; padding: 10px 14px; font-size: 13px;
     margin-bottom: 16px; display: none; }
+  .login-divider { display: flex; align-items: center; gap: 12px; margin: 18px 0;
+    color: var(--text3); font-size: 12px; }
+  .login-divider::before, .login-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+  .sovra-panel { text-align: center; display: none; }
+  /* Fondo blanco fijo: sobre el fondo oscuro del dashboard muchas cámaras no leen el QR */
+  .sovra-qr { display: block; margin: 0 auto 14px; width: 244px; height: 244px;
+    border-radius: 10px; background: #fff; padding: 6px; }
+  .sovra-status { font-size: 13px; color: var(--text2); line-height: 1.45; }
+  .sovra-timer { font-size: 12px; color: var(--text3); font-family: var(--mono); margin: 6px 0 14px; }
+  .sovra-actions { display: flex; gap: 8px; justify-content: center; }
 
   /* ── Code Block ─────────────────── */
   .code-block {
@@ -357,6 +370,7 @@
       <div class="login-title">Matriabot</div>
       <div class="login-sub">Dashboard de Administración</div>
     </div>
+    <div id="password-login">
     <div class="login-error" id="login-error">Credenciales inválidas</div>
     <div class="form-group">
       <label class="form-label">Usuario</label>
@@ -369,6 +383,25 @@
     <button class="btn btn-primary" style="width:100%;justify-content:center;padding:11px" onclick="doLogin()">
       Iniciar Sesión
     </button>
+    </div>
+
+    <!-- Login con Sovra ID: solo se muestra si el backend lo tiene activado (GET /auth/methods) -->
+    <div id="sovra-login-block" style="display:none">
+      <div class="login-divider" id="sovra-divider"><span>o</span></div>
+      <div class="login-error" id="sovra-error"></div>
+      <button class="btn btn-secondary" id="sovra-login-btn" style="width:100%;justify-content:center;padding:11px" onclick="startSovraLogin()">
+        🪪 Ingresar con Sovra ID
+      </button>
+      <div class="sovra-panel" id="sovra-panel">
+        <img class="sovra-qr" id="sovra-qr" alt="Código QR para ingresar con Sovra ID" width="244" height="244">
+        <div class="sovra-status" id="sovra-status" role="status" aria-live="polite"></div>
+        <div class="sovra-timer" id="sovra-timer"></div>
+        <div class="sovra-actions">
+          <a class="btn btn-secondary btn-sm" id="sovra-open" href="#" style="display:none">Abrir en mi wallet</a>
+          <button class="btn btn-secondary btn-sm" type="button" onclick="cancelSovraLogin()">Cancelar</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -416,6 +449,7 @@
         <div class="user-role" id="user-role-display">-</div>
       </div>
     </div>
+    <button class="btn-logout btn-neutral" id="btn-sovra-link" style="display:none" onclick="openSovraLink()">🪪 Vincular Sovra ID</button>
     <button class="btn-logout" onclick="doLogout()">Cerrar Sesión</button>
   </div>
 </div>
@@ -1008,9 +1042,9 @@
       <div class="panel">
         <div class="panel-body" style="padding:0">
           <table>
-            <thead><tr><th>Usuario</th><th>Email</th><th>Rol</th><th>Estado</th><th>Último acceso</th><th>Acciones</th></tr></thead>
+            <thead><tr><th>Usuario</th><th>Email</th><th>Rol</th><th>Estado</th><th>Sovra ID</th><th>Último acceso</th><th>Acciones</th></tr></thead>
             <tbody id="users-table">
-              <tr><td colspan="6" style="text-align:center;color:var(--text3);padding:24px">Cargando...</td></tr>
+              <tr><td colspan="7" style="text-align:center;color:var(--text3);padding:24px">Cargando...</td></tr>
             </tbody>
           </table>
         </div>
@@ -1192,6 +1226,35 @@
   </div>
 </div>
 
+<!-- ══ MODAL: VINCULAR SOVRA ID (el propio usuario) ════════ -->
+<div class="modal-overlay" id="modal-sovra-link">
+  <div class="modal" style="width:400px">
+    <div class="modal-header">
+      <span class="modal-title">Vincular Sovra ID</span>
+      <button class="btn-close" onclick="closeSovraLink()" aria-label="Cerrar">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="login-error" id="sl-error"></div>
+      <div class="sovra-panel" id="sl-panel">
+        <img class="sovra-qr" id="sl-qr" alt="Código QR para vincular Sovra ID" width="244" height="244">
+        <div class="sovra-status" id="sl-status" role="status" aria-live="polite"></div>
+        <div class="sovra-timer" id="sl-timer"></div>
+        <div class="sovra-actions">
+          <a class="btn btn-secondary btn-sm" id="sl-open" href="#" style="display:none">Abrir en mi wallet</a>
+          <button class="btn btn-secondary btn-sm" type="button" onclick="closeSovraLink()">Cancelar</button>
+        </div>
+      </div>
+      <div style="text-align:center">
+        <button class="btn btn-primary" id="sl-retry" type="button" style="display:none" onclick="openSovraLink()">Intentar de nuevo</button>
+      </div>
+      <div class="form-hint" style="margin-top:14px">
+        Se toma el DNI de tu credencial y queda asociado a tu usuario, para que puedas entrar con ella sin contraseña.
+        Tu rol y permisos no cambian. Para cambiar un DNI ya vinculado hay que pedírselo a un administrador.
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ══ MODAL: EDIT USER (solo superadmin) ══════════════════ -->
 <div class="modal-overlay" id="modal-edit-user">
   <div class="modal" style="width:440px">
@@ -1222,6 +1285,11 @@
           <option value="admin">Admin</option>
           <option value="superadmin">SuperAdmin</option>
         </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">DNI para entrar con Sovra ID</label>
+        <input class="form-input" id="eu-sovra-id" inputmode="numeric" autocomplete="off" placeholder="Sin DNI no puede usar ese ingreso">
+        <div class="form-hint">Solo el número (se ignoran puntos y espacios). El usuario también puede vincularlo solo desde su cuenta con "Vincular Sovra ID". Vacío = sin acceso por Sovra.</div>
       </div>
       <div class="form-group">
         <label class="form-label">Nueva Contraseña</label>
@@ -1401,6 +1469,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('settings-api-url').value = API_URL;
   updateModelOptions('new-bot-provider', 'new-bot-model');
   updateModelOptions('cfg-provider', 'cfg-model');
+  loadSovraAvailability();  // antes de initDashboard: este último espera su resultado
   if (token) initDashboard();
 });
 
@@ -1422,6 +1491,9 @@ async function initDashboard() {
       document.getElementById('nav-ai-providers').style.display = 'none';
       document.getElementById('nav-contact-requests').style.display = 'none';
     }
+
+    // "Vincular Sovra ID": solo si el backend lo ofrece y este usuario todavía no tiene un DNI vinculado
+    document.getElementById('btn-sovra-link').style.display = (!me.sovra_linked && await sovraAvailable) ? '' : 'none';
 
     document.getElementById('login-screen').style.display = 'none';
     loadDashboardStats();
@@ -1451,7 +1523,188 @@ async function doLogin() {
   }
 }
 
+// ── Sovra ID ────────────────────────────────────────────────────
+// Un mismo flujo sirve para entrar (login) y para vincular el DNI a la cuenta (usuario ya logueado):
+// start → el usuario escanea el QR con su wallet → se consulta el estado cada 2 s hasta que el
+// backend confirma. El poll_secret vive solo en memoria y viaja en un header (no en la URL).
+// Cada uso pasa sus ids de elementos, sus rutas y qué hacer al empezar/terminar.
+const SOVRA_EXPIRED_MSG = 'El código venció. Generá uno nuevo.';
+
+function createSovraFlow(cfg) {
+  let cur = null;  // intento en curso; null = ninguno
+  let gen = 0;     // cambia con cada stop(): descarta respuestas de un intento ya cancelado
+  const $ = k => document.getElementById(cfg.ids[k]);
+
+  function stop() {
+    gen++;
+    if (cur) { clearTimeout(cur.poll); clearInterval(cur.tick); }
+    cur = null;
+  }
+  function end(error) { stop(); cfg.onEnd(error); }
+
+  async function start() {
+    stop();
+    const g = gen;
+    cfg.onStart();
+    $('qr').removeAttribute('src');
+    $('timer').textContent = '';
+    $('open').style.display = 'none';
+    $('status').textContent = 'Generando código…';
+    let s;
+    try {
+      s = await api(cfg.startPath, 'POST', null, cfg.auth);
+    } catch (e) {
+      if (g !== gen) return;
+      return end(e.message || 'No se pudo iniciar el ingreso con Sovra ID.');
+    }
+    if (g !== gen) return;  // se canceló mientras se creaba la sesión
+    const mine = cur = {
+      id: s.login_id, secret: s.poll_secret, failures: 0,
+      expiresAt: Date.now() + s.ttl_seconds * 1000, poll: null, tick: null,
+    };
+    $('qr').src = s.qr_data_uri;
+    // El link directo sirve en el celular (abre la wallet instalada). Solo se acepta ese esquema.
+    if (/^openid4vp:\/\//.test(s.authorization_request_uri) && matchMedia('(pointer: coarse)').matches) {
+      $('open').href = s.authorization_request_uri;
+      $('open').style.display = '';
+    }
+    $('status').textContent = cfg.prompt;
+    mine.tick = setInterval(() => tick(mine), 1000);
+    tick(mine);
+    mine.poll = setTimeout(() => poll(mine), 1500);
+  }
+
+  function tick(mine) {
+    if (cur !== mine) return;
+    const left = Math.max(0, Math.round((mine.expiresAt - Date.now()) / 1000));
+    $('timer').textContent = `Vence en ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    if (left === 0) end(SOVRA_EXPIRED_MSG);
+  }
+
+  async function poll(mine) {
+    if (cur !== mine) return;  // se canceló o arrancó otro intento
+    try {
+      const r = await api(cfg.statusPath(mine.id), 'GET', null, cfg.auth, { 'X-Poll-Secret': mine.secret });
+      if (cur !== mine) return;
+      mine.failures = 0;
+      if (r.status === 'pending') { mine.poll = setTimeout(() => poll(mine), 2000); return; }
+      stop();
+      if (r.status === 'ok') await cfg.onOk(r);
+      else if (r.status === 'expired') cfg.onEnd(SOVRA_EXPIRED_MSG);
+      else cfg.onEnd(cfg.failMessage(r));
+    } catch {
+      if (cur !== mine) return;
+      if (++mine.failures >= 5) end('Se perdió la conexión con el servidor. Intentá de nuevo.');
+      else mine.poll = setTimeout(() => poll(mine), 3000);
+    }
+  }
+
+  return { start, cancel() { stop(); cfg.onEnd(''); } };
+}
+
+// ¿El backend ofrece Sovra ID? Se consulta una vez al cargar; lo usan el login y el botón de vincular.
+let sovraAvailable = Promise.resolve(false);
+
+function loadSovraAvailability() {
+  sovraAvailable = api('/api/v1/auth/methods', 'GET', null, false)
+    .then(m => !!m.sovra)
+    .catch(() => false);  // sin backend o sin el endpoint: queda solo usuario/contraseña
+  sovraAvailable.then(ok => {
+    if (ok) document.getElementById('sovra-login-block').style.display = 'block';
+  });
+}
+
+// ── Sovra ID: entrar ──
+function showSovraError(msg) {
+  const el = document.getElementById('sovra-error');
+  el.textContent = msg;
+  el.style.display = msg ? 'block' : 'none';
+}
+
+// Vuelve al estado inicial (botón visible, panel oculto). `error` muestra un aviso arriba.
+function resetSovraLoginUI(error = '') {
+  document.getElementById('sovra-panel').style.display = 'none';
+  document.getElementById('sovra-qr').removeAttribute('src');
+  document.getElementById('password-login').style.display = '';
+  document.getElementById('sovra-divider').style.display = '';
+  const btn = document.getElementById('sovra-login-btn');
+  btn.style.display = '';
+  btn.textContent = error ? '🪪 Intentar de nuevo' : '🪪 Ingresar con Sovra ID';
+  showSovraError(error);
+}
+
+const sovraLoginFlow = createSovraFlow({
+  ids: { qr: 'sovra-qr', status: 'sovra-status', timer: 'sovra-timer', open: 'sovra-open' },
+  startPath: '/api/v1/auth/sovra/start',
+  statusPath: id => `/api/v1/auth/sovra/${encodeURIComponent(id)}`,
+  auth: false,
+  prompt: 'Escaneá el código con tu wallet de Sovra y aprobá el ingreso.',
+  onStart() {
+    showSovraError('');
+    document.getElementById('password-login').style.display = 'none';  // el QR ocupa su lugar; Cancelar lo vuelve a mostrar
+    document.getElementById('sovra-divider').style.display = 'none';
+    document.getElementById('sovra-login-btn').style.display = 'none';
+    document.getElementById('sovra-panel').style.display = 'block';
+  },
+  onEnd: resetSovraLoginUI,
+  async onOk(r) {
+    token = r.access_token;
+    localStorage.setItem('matriabot_token', token);
+    resetSovraLoginUI();
+    document.getElementById('login-error').style.display = 'none';
+    await initDashboard();
+  },
+  // Mismo mensaje para cualquier rechazo: el backend no dice por qué (no revela qué DNIs existen)
+  failMessage: () => 'No pudimos verificar tu identidad. Si el problema sigue, contactá al administrador.',
+});
+
+function startSovraLogin() { return sovraLoginFlow.start(); }
+function cancelSovraLogin() { sovraLoginFlow.cancel(); }
+
+// ── Sovra ID: vincular el DNI a mi cuenta (ya logueado) ──
+const SOVRA_LINK_REASONS = {
+  taken: 'Ese DNI ya está vinculado a otro usuario. Contactá al administrador.',
+  already_linked: 'Tu usuario ya tiene un Sovra ID vinculado. Para cambiarlo, pedíselo a un administrador.',
+};
+
+const sovraLinkFlow = createSovraFlow({
+  ids: { qr: 'sl-qr', status: 'sl-status', timer: 'sl-timer', open: 'sl-open' },
+  startPath: '/api/v1/auth/sovra/link/start',
+  statusPath: id => `/api/v1/auth/sovra/link/${encodeURIComponent(id)}`,
+  auth: true,
+  prompt: 'Escaneá el código con tu wallet de Sovra y aprobá la vinculación.',
+  onStart() {
+    document.getElementById('sl-error').style.display = 'none';
+    document.getElementById('sl-retry').style.display = 'none';
+    document.getElementById('sl-panel').style.display = 'block';
+    document.getElementById('modal-sovra-link').classList.add('open');
+  },
+  onEnd(error) {
+    document.getElementById('sl-panel').style.display = 'none';
+    document.getElementById('sl-qr').removeAttribute('src');
+    if (!error) return closeModal('modal-sovra-link');  // cancelado a propósito
+    const el = document.getElementById('sl-error');
+    el.textContent = error;
+    el.style.display = 'block';
+    document.getElementById('sl-retry').style.display = '';
+  },
+  async onOk() {
+    closeModal('modal-sovra-link');
+    if (currentUser) currentUser.sovra_linked = true;
+    document.getElementById('btn-sovra-link').style.display = 'none';
+    toast('Sovra ID vinculado. Ya podés entrar con tu credencial.', 'success');
+    if (document.getElementById('page-users')?.classList.contains('active')) loadUsers();
+  },
+  failMessage: r => SOVRA_LINK_REASONS[r.reason]
+    || 'No pudimos verificar tu credencial. Si el problema sigue, contactá al administrador.',
+});
+
+function openSovraLink() { return sovraLinkFlow.start(); }
+function closeSovraLink() { sovraLinkFlow.cancel(); }
+
 function doLogout() {
+  cancelSovraLogin();
+  sovraLinkFlow.cancel();
   localStorage.removeItem('matriabot_token');
   token = null;
   currentUser = null;
@@ -1474,8 +1727,8 @@ function escapeHtml(value) {
   ));
 }
 
-async function api(path, method = 'GET', body = null, auth = true) {
-  const headers = { 'Content-Type': 'application/json' };
+async function api(path, method = 'GET', body = null, auth = true, extraHeaders = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extraHeaders };
   if (auth && token) headers['Authorization'] = `Bearer ${token}`;
 
   const opts = { method, headers };
@@ -2847,6 +3100,7 @@ async function loadUsers() {
         <td>${escapeHtml(u.email)}</td>
         <td>${roleBadge(u.role)}</td>
         <td><span class="dot ${u.is_active ? 'dot-green' : 'dot-red'}"></span> ${u.is_active ? 'Activo' : 'Inactivo'}</td>
+        <td class="text-sm">${sovraIdCell(u)}</td>
         <td class="text-sm text-muted">-</td>
         <td style="display:flex;gap:6px">
           ${canEdit ? `<button class="btn btn-secondary btn-sm" onclick="openEditUserModal('${u.id}')">✏️ Editar</button>` : ''}
@@ -2855,7 +3109,14 @@ async function loadUsers() {
           </button>
         </td>
       </tr>`).join('');
-  } catch(e) { tbody.innerHTML = `<tr><td colspan="6" style="color:var(--danger)">Sin acceso</td></tr>`; }
+  } catch(e) { tbody.innerHTML = `<tr><td colspan="7" style="color:var(--danger)">Sin acceso</td></tr>`; }
+}
+
+// El superadmin ve el DNI; el admin solo si hay uno vinculado (el backend no se lo manda)
+function sovraIdCell(u) {
+  if (u.sovra_identifier) return `<span class="text-mono">${escapeHtml(u.sovra_identifier)}</span>`;
+  if (u.has_sovra_id) return '<span title="Tiene un DNI vinculado">✓ vinculado</span>';
+  return '<span class="text-muted">—</span>';
 }
 
 function openCreateUserModal() {
@@ -2898,6 +3159,7 @@ function openEditUserModal(userId) {
   document.getElementById('eu-email').value = u.email || '';
   document.getElementById('eu-fullname').value = u.full_name || '';
   document.getElementById('eu-role').value = u.role || 'viewer';
+  document.getElementById('eu-sovra-id').value = u.sovra_identifier || '';
   document.getElementById('eu-password').value = '';
   hidePasswords(document.getElementById('modal-edit-user'));
   document.getElementById('modal-edit-user').classList.add('open');
@@ -2909,6 +3171,7 @@ async function saveUserEdit() {
     email: document.getElementById('eu-email').value.trim(),
     full_name: document.getElementById('eu-fullname').value.trim(),
     role: document.getElementById('eu-role').value,
+    sovra_identifier: document.getElementById('eu-sovra-id').value.trim(),  // '' lo quita; el backend lo normaliza y valida
   };
   if (!data.username || !data.email) { toast('Completa username y email', 'error'); return; }
   const password = document.getElementById('eu-password').value;

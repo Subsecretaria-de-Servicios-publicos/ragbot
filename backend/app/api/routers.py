@@ -14,7 +14,7 @@ import hashlib
 import aiofiles
 from datetime import datetime, timezone
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile, File, Form, status, BackgroundTasks, Request
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from sqlalchemy import select, func, update, delete, text, or_, case
@@ -43,6 +43,10 @@ from app.core.crypto import encrypt_secret, decrypt_secret, scrub_secrets
 from app.services.bot_keys import BotUnavailable, MSG_UNAVAILABLE, month_usage, current_month, record_usage
 from app.services.chat_service import ChatService
 from app.services.rag_service import RAGService, DocumentExtractor
+from app.services.sovra_client import SovraClient, SovraError
+from app.services.sovra_login import SovraLoginService, normalize_dni
+from app.services.sovra_login_store import SqlLoginStore
+import segno
 
 logger = structlog.get_logger()
 
@@ -306,14 +310,8 @@ def _hash_api_key(raw_key: str) -> str:
 auth_router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@auth_router.post("/login", response_model=TokenResponse)
-async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.username == data.username))
-    user = result.scalar_one_or_none()
-    if not user or not verify_password(data.password, user.hashed_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales inválidas")
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario desactivado")
+async def _login_success(db: AsyncSession, user: User) -> TokenResponse:
+    """Emite los JWT y registra el último login. Lo comparten todos los métodos de login."""
     payload = {"sub": user.id, "username": user.username, "role": user.role.value}
     await db.execute(update(User).where(User.id == user.id).values(last_login=datetime.now(timezone.utc)))
     await db.commit()
@@ -323,6 +321,131 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
         role=user.role.value,
         user_id=user.id,
     )
+
+
+@auth_router.post("/login", response_model=TokenResponse)
+async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.username == data.username))
+    user = result.scalar_one_or_none()
+    if not user or not verify_password(data.password, user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Credenciales inválidas")
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario desactivado")
+    return await _login_success(db, user)
+
+
+# ─── Login con Sovra ID ──────────────────────────────────────
+# El usuario presenta una credencial verificable desde su wallet; se lo busca por DNI
+# (users.sovra_identifier). Lógica en services/sovra_login.py. Apagado por defecto.
+
+def _sovra_login_configured() -> bool:
+    # Sin SOVRA_LOGIN_VCT cualquier credencial con el claim del DNI serviría, sin importar el
+    # tipo: se exige configurarlo para que el login pueda activarse.
+    return bool(settings.SOVRA_BASE_URL and settings.SOVRA_API_KEY and settings.SOVRA_LOGIN_VCT)
+
+
+@auth_router.get("/methods")
+async def login_methods():
+    """Qué métodos de login ofrece la pantalla de ingreso (para mostrar u ocultar el botón de Sovra)."""
+    return {"password": True, "sovra": settings.SOVRA_LOGIN_ENABLED and _sovra_login_configured()}
+
+
+def _sovra_login_service(db: AsyncSession) -> SovraLoginService:
+    if not settings.SOVRA_LOGIN_ENABLED:
+        raise HTTPException(404, "Not Found")
+    if not _sovra_login_configured():
+        logger.error("sovra_login_misconfigured")
+        raise HTTPException(503, "El login con Sovra ID no está disponible")
+    try:
+        client = SovraClient()
+    except SovraError as e:
+        logger.error("sovra_login_misconfigured", error=str(e))
+        raise HTTPException(503, "El login con Sovra ID no está disponible")
+    return SovraLoginService(SqlLoginStore(db), client)
+
+
+async def _sovra_start_rate_limit(request: Request) -> None:
+    """Cada intento crea una sesión en Sovra, así que lleva un tope propio, más bajo que el
+    rate limit general. Mismo criterio que el middleware: si Redis no está, no se bloquea."""
+    try:
+        import redis.asyncio as redis_async
+        r = redis_async.from_url(settings.REDIS_URL, decode_responses=True)
+        key = f"rl:sovra_start:{get_client_ip(request)}"
+        current = await r.incr(key)
+        if current == 1:
+            await r.expire(key, settings.SOVRA_START_RATE_WINDOW_SECONDS)
+        await r.aclose()
+    except Exception:
+        return
+    if current > settings.SOVRA_START_RATE_LIMIT:
+        raise HTTPException(429, "Demasiados intentos. Probá de nuevo en un momento.",
+                            headers={"Retry-After": str(settings.SOVRA_START_RATE_WINDOW_SECONDS)})
+
+
+async def _sovra_start(request: Request, db: AsyncSession, purpose: str = "login", user_id: Optional[str] = None) -> dict:
+    svc = _sovra_login_service(db)
+    await _sovra_start_rate_limit(request)
+    try:
+        res = await svc.start(get_client_ip(request), request.headers.get("user-agent"), purpose, user_id)
+    except SovraError as e:
+        logger.error("sovra_login_start_failed", purpose=purpose, error=scrub_secrets(str(e)))
+        raise HTTPException(503, "No se pudo iniciar el ingreso con Sovra ID")
+    return {
+        "login_id": res.login_id,
+        "poll_secret": res.poll_secret,  # solo se entrega ahora; el navegador lo manda en X-Poll-Secret
+        "authorization_request_uri": res.uri,  # lo que va en el QR / link a la wallet
+        # QR listo para un <img src>. Fondo blanco fijo: el dashboard es oscuro y un QR sobre fondo
+        # oscuro no lo leen todas las cámaras. Se dibuja acá para no sumar una librería al navegador.
+        "qr_data_uri": segno.make(res.uri, error="l").svg_data_uri(scale=5, border=2, dark="#000", light="#fff"),
+        "expires_at": res.expires_at.isoformat(),
+        "ttl_seconds": int((res.expires_at - datetime.now(timezone.utc)).total_seconds()),
+    }
+
+
+@auth_router.post("/sovra/start", status_code=201)
+async def sovra_login_start(request: Request, db: AsyncSession = Depends(get_db)):
+    return await _sovra_start(request, db)
+
+
+# Vincular: un usuario YA logueado asocia el DNI de su credencial a su cuenta (en vez de que un
+# superadmin lo tipee). El usuario sale del token, nunca del navegador. Solo si todavía no tiene
+# DNI vinculado: cambiarlo lo hace un admin (con un token robado se podría, si no, vincular una
+# credencial ajena y quedar con una puerta de entrada permanente a esa cuenta).
+@auth_router.post("/sovra/link/start", status_code=201)
+async def sovra_link_start(request: Request, payload: dict = Depends(get_current_user_payload),
+                           db: AsyncSession = Depends(get_db)):
+    return await _sovra_start(request, db, purpose="link", user_id=payload["sub"])
+
+
+@auth_router.get("/sovra/link/{login_id}")
+async def sovra_link_status(login_id: str, x_poll_secret: Optional[str] = Header(None),
+                            payload: dict = Depends(get_current_user_payload),
+                            db: AsyncSession = Depends(get_db)):
+    svc = _sovra_login_service(db)
+    res = await svc.poll(login_id, x_poll_secret or "", purpose="link", user_id=payload["sub"])
+    if res is None:
+        raise HTTPException(404, "Intento de vinculación inexistente")
+    out = {"status": res.status}
+    if res.reason:
+        out["reason"] = res.reason  # 'taken' | 'already_linked'
+    return out
+
+
+@auth_router.get("/sovra/{login_id}")
+async def sovra_login_status(login_id: str, x_poll_secret: Optional[str] = Header(None),
+                             db: AsyncSession = Depends(get_db)):
+    # El secreto va en un header (no en la URL) para que no quede en logs ni en el historial.
+    svc = _sovra_login_service(db)
+    res = await svc.poll(login_id, x_poll_secret or "", purpose="login")
+    if res is None:  # no existe, secreto incorrecto o es un intento de vinculación: misma respuesta
+        raise HTTPException(404, "Intento de login inexistente")
+    if res.status != "ok":
+        return {"status": res.status}
+    user = await db.get(User, res.user_id)
+    if not user or not user.is_active:  # pudo desactivarse entre la verificación y la entrega
+        return {"status": "failed"}
+    tokens = await _login_success(db, user)
+    return {"status": "ok", **tokens.model_dump()}
 
 
 @auth_router.post("/refresh")
@@ -344,7 +467,8 @@ async def me(payload: dict = Depends(get_current_user_payload), db: AsyncSession
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     return {"id": user.id, "email": user.email, "username": user.username,
-            "role": user.role.value, "full_name": user.full_name}
+            "role": user.role.value, "full_name": user.full_name,
+            "sovra_linked": bool(user.sovra_identifier)}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -358,8 +482,13 @@ users_router = APIRouter(prefix="/users", tags=["users"])
 async def list_users(payload: dict = Depends(require_role("admin")), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).order_by(User.created_at.desc()))
     users = result.scalars().all()
-    return [{"id": u.id, "email": u.email, "username": u.username,
-             "role": u.role.value, "is_active": u.is_active} for u in users]
+    # full_name lo necesita el modal de edición (antes no venía y al guardar se pisaba con vacío).
+    # El DNI completo solo lo ve el superadmin, que es quien lo puede editar; el resto ve si hay uno.
+    is_super = payload["role"] == "superadmin"
+    return [{"id": u.id, "email": u.email, "username": u.username, "full_name": u.full_name,
+             "role": u.role.value, "is_active": u.is_active,
+             "has_sovra_id": bool(u.sovra_identifier),
+             **({"sovra_identifier": u.sovra_identifier} if is_super else {})} for u in users]
 
 
 @users_router.post("/", status_code=201)
@@ -380,6 +509,16 @@ async def update_user(user_id: str, data: dict, payload: dict = Depends(require_
     user = await db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if "sovra_identifier" in data:
+        raw = data["sovra_identifier"]
+        ident = normalize_dni(raw) if raw not in (None, "") else None
+        if raw not in (None, "") and ident is None:
+            raise HTTPException(status_code=422, detail="DNI inválido")
+        if ident:
+            dup = await db.execute(select(User.id).where(User.sovra_identifier == ident, User.id != user_id))
+            if dup.first():
+                raise HTTPException(status_code=409, detail="Ese DNI ya está asignado a otro usuario")
+        data = {**data, "sovra_identifier": ident}
     for k, v in data.items():
         if hasattr(user, k) and k not in ("id", "hashed_password"):
             setattr(user, k, v)

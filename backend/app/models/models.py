@@ -64,10 +64,38 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(SAEnum(UserRole), default=UserRole.viewer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_login: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # DNI (solo dígitos) con el que el usuario entra por Sovra ID. NULL = no puede usar ese login.
+    # Se usa el DNI y no el holder_did porque el DID cambia con cada wallet.
+    sovra_identifier: Mapped[Optional[str]] = mapped_column(String(20), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     chatbots: Mapped[List["Chatbot"]] = relationship("Chatbot", back_populates="owner")
+
+
+class SovraLoginSession(Base):
+    """Un intento de login al dashboard con Sovra ID. `id` es el login_id que ve el navegador;
+    el navegador además recibe un poll_secret (solo se guarda su hash) para consultar el estado,
+    así que conocer el login_id no alcanza. Estados: pending → verified → consumed (un solo uso);
+    failed y expired son terminales.
+
+    `purpose` distingue 'login' (entrar al dashboard) de 'link' (un usuario ya logueado vincula su
+    DNI a su cuenta; `link_user_id` sale del token de quien lo inició, nunca del navegador)."""
+    __tablename__ = "sovra_login_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    sovra_session_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    poll_secret_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(10), nullable=False, default="login")
+    link_user_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    user_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"))
+    error: Mapped[Optional[str]] = mapped_column(String(100))  # motivo interno; al navegador nunca se le muestra
+    ip_address: Mapped[Optional[str]] = mapped_column(String(45))
+    user_agent: Mapped[Optional[str]] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 # ─── Chatbot ─────────────────────────────────────────────────
