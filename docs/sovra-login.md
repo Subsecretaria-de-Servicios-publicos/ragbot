@@ -145,7 +145,7 @@ El script **no necesitó cambios** para esta función; ya hace todo lo necesario
 |---|---|
 | `git pull --ff-only` | Trae el código. El dashboard es HTML estático que Apache sirve desde `frontend/dashboard`: **llega con el pull, sin reiniciar nada** (refrescar con Ctrl+F5 por la caché del navegador). |
 | `pip install -r requirements.txt` | Instala la dependencia nueva `segno` (dibuja el QR). |
-| `alembic upgrade head` | Aplica la migración `0019_sovra_login` (columnas `users.sovra_identifier` y `users.sovra_holder_did` y tabla `sovra_login_sessions`). |
+| `alembic upgrade head` | Aplica las migraciones `0019_sovra_login` (columna `users.sovra_identifier` y tabla `sovra_login_sessions`) y `0020_sovra_holder_did` (columna `users.sovra_holder_did`). |
 | `systemctl restart ragbot` | Reinicia el backend, que lee el `.env` (la unidad usa `EnvironmentFile`). |
 
 **Apache no necesita cambios.** Las rutas nuevas están bajo `/api/v1/auth/…`, que ya se proxea
@@ -161,7 +161,7 @@ Si solo se cambió el `.env` (sin código nuevo): `sudo systemctl restart ragbot
 **Verificar después de desplegar:**
 
 ```bash
-# La migración quedó aplicada (debe mostrar 0019_sovra_login (head))
+# La migración quedó aplicada (debe mostrar 0020_sovra_holder_did (head))
 cd backend && PYTHONPATH=. .venv/bin/alembic current
 
 # El backend ofrece el login con Sovra (true solo si está activado Y configurado)
@@ -292,7 +292,7 @@ Esto no se pudo comprobar contra Sovra real y **conviene cerrarlo antes de usarl
 | Cliente HTTP de Sovra | `backend/app/services/sovra_client.py` |
 | Acceso a la base | `backend/app/services/sovra_login_store.py` |
 | Endpoints (`/auth/methods`, `/auth/sovra/*`) | `backend/app/api/routers.py` (sección AUTH) |
-| Modelos y migración | `models.py` (`SovraLoginSession`, `User.sovra_identifier`, `User.sovra_holder_did`) y `alembic/versions/0019_sovra_login.py` |
+| Modelos y migración | `models.py` (`SovraLoginSession`, `User.sovra_identifier`, `User.sovra_holder_did`) y `alembic/versions/0019_sovra_login.py` y `0020_sovra_holder_did.py` |
 | Pantalla de login, vincular y usuarios | `frontend/dashboard/index.html` (`createSovraFlow`) |
 
 **Pruebas automáticas** (sin red ni base de datos; usan `unittest`, no hace falta instalar nada más):

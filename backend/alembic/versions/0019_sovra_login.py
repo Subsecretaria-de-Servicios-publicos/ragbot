@@ -1,8 +1,7 @@
 """sovra_login
 
-Login al dashboard con credencial de Sovra ID: users.sovra_identifier (DNI de la credencial) y
-users.sovra_holder_did (wallet vinculada, con la que se identifica al usuario) y
-sovra_login_sessions (un intento de login o de vinculación, de un solo uso).
+Login al dashboard con credencial de Sovra ID: users.sovra_identifier (DNI con el que se busca al
+usuario) y sovra_login_sessions (un intento de login o de vinculación del DNI, de un solo uso).
 
 Revision ID: 0019_sovra_login
 Revises: 0018_web_search
@@ -29,9 +28,6 @@ def upgrade() -> None:
     if 'sovra_identifier' not in user_cols:
         op.add_column('users', sa.Column('sovra_identifier', sa.String(20), nullable=True))
         op.create_unique_constraint('uq_users_sovra_identifier', 'users', ['sovra_identifier'])
-    if 'sovra_holder_did' not in user_cols:
-        op.add_column('users', sa.Column('sovra_holder_did', sa.String(255), nullable=True))
-        op.create_unique_constraint('uq_users_sovra_holder_did', 'users', ['sovra_holder_did'])
 
     if 'sovra_login_sessions' not in insp.get_table_names():
         op.create_table(
@@ -55,7 +51,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table('sovra_login_sessions')
-    op.drop_constraint('uq_users_sovra_holder_did', 'users', type_='unique')
-    op.drop_column('users', 'sovra_holder_did')
     op.drop_constraint('uq_users_sovra_identifier', 'users', type_='unique')
     op.drop_column('users', 'sovra_identifier')
