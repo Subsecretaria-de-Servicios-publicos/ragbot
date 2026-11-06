@@ -64,9 +64,12 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(SAEnum(UserRole), default=UserRole.viewer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_login: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    # DNI (solo dígitos) con el que el usuario entra por Sovra ID. NULL = no puede usar ese login.
-    # Se usa el DNI y no el holder_did porque el DID cambia con cada wallet.
+    # DNI (solo dígitos) de la credencial de Sovra ID. Lo puede cargar un admin o salir de la vinculación.
     sovra_identifier: Mapped[Optional[str]] = mapped_column(String(20), unique=True)
+    # holder_did de la wallet vinculada: es lo que ata el login por Sovra ID a este usuario (Sovra no
+    # informa el emisor, así que el DNI solo no alcanza). NULL = no puede usar ese login. Cambia si
+    # el usuario cambia de wallet: lo desvincula un admin y se vuelve a vincular.
+    sovra_holder_did: Mapped[Optional[str]] = mapped_column(String(255), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 

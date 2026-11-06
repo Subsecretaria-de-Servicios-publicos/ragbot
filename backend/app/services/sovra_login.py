@@ -1,12 +1,18 @@
 """app/services/sovra_login.py — Login al dashboard con credencial de Sovra ID.
 
 Flujo: start() crea una sesión de verificación en Sovra y un intento de login propio; el navegador
-consulta poll() hasta que Sovra confirma la presentación. Entonces se busca al usuario por el DNI de
-la credencial y, si existe y está activo, el intento se canjea UNA vez (el router emite los JWT).
+consulta poll() hasta que Sovra confirma la presentación. Entonces se busca al usuario por el
+holder_did de la presentación y, si existe, está activo y su DNI coincide con el de la credencial,
+el intento se canjea UNA vez (el router emite los JWT).
+
+Sovra no informa emisor ni tipo de credencial en el resultado, así que el DNI solo no alcanza (otra
+credencial con el DNI de un usuario serviría). Lo que ata el login a una persona es el holder_did,
+que se guarda cuando el usuario, ya logueado con su contraseña, vincula su wallet (purpose='link').
+Sin vinculación previa no hay login por Sovra, aunque el admin le haya cargado el DNI.
 
 La credencial solo prueba quién es: el rol sale siempre de la tabla users. Cualquier motivo de
-rechazo (DNI sin usuario, usuario inactivo, emisor distinto, etc.) se informa al navegador como
-"failed" sin detalle, para no revelar qué DNIs existen; el motivo real queda en el log.
+rechazo (holder sin vincular, usuario inactivo, DNI distinto, etc.) se informa al navegador como
+"failed" sin detalle, para no revelar qué cuentas existen; el motivo real queda en el log.
 
 Persistencia detrás de LoginStore (ver sovra_login_store.py) para poder probar la lógica sin base.
 """
@@ -27,6 +33,7 @@ from app.services.sovra_client import SovraClient, SovraError
 logger = structlog.get_logger()
 
 MAX_SOVRA_TTL_SECONDS = 600  # Sovra no deja vivir una sesión de verificación más que esto
+MAX_HOLDER_DID_LEN = 255  # largo de users.sovra_holder_did
 
 _DNI_RE = re.compile(r"\d{6,10}")
 
@@ -48,12 +55,10 @@ def build_login_dcql(claim: str, vct: str) -> dict:
 
 
 # ─── Lectura de la presentación ──────────────────────────────
-# OJO: Sovra documenta presentation_data solo como "object". La forma de abajo sale de la guía de
-# webhooks (presentation.verified → credentials[].claims) y NO está verificada contra una
-# presentación real. Está aislada acá a propósito: si la forma real es otra, se ajusta esta función.
-_ISSUER_KEYS = ("iss", "issuer", "issuer_did")
-
-
+# Forma documentada por Sovra para una verificación completada (confirmada por ellos con un ejemplo
+# real): presentation_data.credentials[] = {id, format, claims}, donde `id` es el de la consulta DCQL y
+# `claims` trae los datos pedidos con el mismo nombre. El emisor y el tipo NO vienen. El holder_did
+# viene al nivel de la verificación, no dentro de presentation_data.
 def _entries(data: Any) -> list:
     if isinstance(data, list):
         return [e for e in data if isinstance(e, dict)]
@@ -67,23 +72,21 @@ def _entries(data: Any) -> list:
     return [data]
 
 
-def extract_presented(presentation_data: Any, claim: str) -> Tuple[Any, Optional[str]]:
-    """(valor del claim, emisor informado) de la primera credencial que traiga el claim."""
+def extract_presented(presentation_data: Any, claim: str) -> Any:
+    """Valor del claim en la primera credencial que lo traiga (None si no está)."""
     for entry in _entries(presentation_data):
         claims = entry.get("claims") if isinstance(entry.get("claims"), dict) else entry
         if claim in claims:
-            issuer = next((entry[k] for k in _ISSUER_KEYS if isinstance(entry.get(k), str)), None)
-            return claims[claim], issuer
-    return None, None
+            return claims[claim]
+    return None
 
 
-def issuer_matches(issuer: Optional[str], expected_did: str) -> bool:
-    """Sovra informa el emisor como una URL https cuyo path termina en el DID (ver `iss` de sus
-    credenciales); también se acepta el DID pelado."""
-    if not issuer or not expected_did:
-        return False
-    issuer = issuer.rstrip("/")
-    return issuer == expected_did or issuer.endswith("/" + expected_did)
+def normalize_holder_did(raw: Any) -> Optional[str]:
+    """El holder_did tal cual lo informa Sovra, o None si falta o no es un texto razonable."""
+    if not isinstance(raw, str):
+        return None
+    did = raw.strip()
+    return did if did.startswith("did:") and len(did) <= MAX_HOLDER_DID_LEN else None
 
 
 # ─── Persistencia ────────────────────────────────────────────
@@ -106,6 +109,7 @@ class LoginRecord:
 class UserRef:
     id: str
     is_active: bool
+    identifier: Optional[str] = None  # DNI del usuario (users.sovra_identifier)
 
 
 class LoginStore(Protocol):
@@ -114,10 +118,12 @@ class LoginStore(Protocol):
     async def update(self, login_id: str, **fields: Any) -> None: ...
     async def consume(self, login_id: str) -> bool:
         """verified → consumed de forma atómica. True solo para quien lo logra (un solo uso)."""
-    async def find_user_by_identifier(self, identifier: str) -> Optional[UserRef]: ...
-    async def link_identifier(self, user_id: str, identifier: str) -> str:
-        """Asigna el DNI al usuario de forma atómica, solo si todavía no tiene uno.
-        Devuelve 'ok', 'already_linked' (ya tenía) o 'taken' (lo tiene otro usuario)."""
+    async def find_user_by_holder(self, holder_did: str) -> Optional[UserRef]: ...
+    async def link_identity(self, user_id: str, identifier: str, holder_did: str) -> str:
+        """Guarda DNI + holder_did del usuario de forma atómica. Solo si todavía no tiene wallet
+        vinculada y su DNI está sin cargar o ya es este (el que le asignó el admin).
+        Devuelve 'ok', 'already_linked' (ya tenía wallet), 'mismatch' (tiene otro DNI cargado) o
+        'taken' (el DNI o el holder_did ya son de otro usuario)."""
 
 
 @dataclass
@@ -132,7 +138,8 @@ class StartResult:
 class PollResult:
     status: str  # pending | ok | failed | expired
     user_id: Optional[str] = None
-    # Solo en 'link' (el usuario ya está autenticado, no hay nada que ocultarle): 'taken' | 'already_linked'
+    # Solo en 'link' (el usuario ya está autenticado, no hay nada que ocultarle):
+    # 'taken' | 'already_linked' | 'mismatch'
     reason: Optional[str] = None
 
 
@@ -222,25 +229,27 @@ class SovraLoginService:
         return PollResult("pending")
 
     async def _complete(self, rec: LoginRecord, sov: dict) -> PollResult:
-        value, issuer = extract_presented(sov.get("presentation_data"), self.cfg.SOVRA_LOGIN_CLAIM)
-        dni = normalize_dni(value)
+        dni = normalize_dni(extract_presented(sov.get("presentation_data"), self.cfg.SOVRA_LOGIN_CLAIM))
         if dni is None:
             return await self._fail(rec, "no_identifier_in_presentation")
-        if self.cfg.SOVRA_LOGIN_ISSUER_DID and not issuer_matches(issuer, self.cfg.SOVRA_LOGIN_ISSUER_DID):
-            return await self._fail(rec, "issuer_mismatch")
+        holder = normalize_holder_did(sov.get("holder_did"))
+        if holder is None:
+            return await self._fail(rec, "no_holder_did")
         if rec.purpose == "link":
-            return await self._complete_link(rec, dni)
-        user = await self.store.find_user_by_identifier(dni)
+            return await self._complete_link(rec, dni, holder)
+        user = await self.store.find_user_by_holder(holder)
         if user is None:
-            return await self._fail(rec, "no_user_for_identifier")
+            return await self._fail(rec, "holder_not_linked")
         if not user.is_active:
             return await self._fail(rec, "user_inactive")
+        if user.identifier != dni:  # el admin le cambió el DNI y todavía no revinculó, o credencial distinta
+            return await self._fail(rec, "identifier_mismatch")
         await self.store.update(rec.id, status="verified", user_id=user.id)
         rec.user_id = user.id
         return await self._deliver(rec)
 
-    async def _complete_link(self, rec: LoginRecord, dni: str) -> PollResult:
-        outcome = await self.store.link_identifier(rec.link_user_id, dni)
+    async def _complete_link(self, rec: LoginRecord, dni: str, holder: str) -> PollResult:
+        outcome = await self.store.link_identity(rec.link_user_id, dni, holder)
         if outcome != "ok":
             return await self._fail(rec, f"link_{outcome}")
         await self.store.update(rec.id, status="verified", user_id=rec.link_user_id)

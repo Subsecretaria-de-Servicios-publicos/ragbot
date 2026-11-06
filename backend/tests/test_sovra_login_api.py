@@ -20,18 +20,21 @@ from app.core.security import create_access_token, decode_token  # noqa: E402
 from app.db.session import get_db  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models.models import UserRole  # noqa: E402
-from app.services.sovra_login import SovraLoginService, UserRef  # noqa: E402
+from app.services.sovra_login import SovraLoginService  # noqa: E402
 
 # Reusa los dobles de test_sovra_login.py
 sys.path.insert(0, os.path.dirname(__file__))
-from test_sovra_login import FakeSovra, FakeStore, cfg, completed  # noqa: E402
+from test_sovra_login import (  # noqa: E402
+    HOLDER, OTHER_HOLDER, Account, FakeSovra, FakeStore, cfg, completed, linked,
+)
 
 BASE = "/api/v1/auth/sovra"
 
 
-def make_user(uid="u1", role=UserRole.operator, identifier=None, **kw):
+def make_user(uid="u1", role=UserRole.operator, identifier=None, holder=None, **kw):
     return SimpleNamespace(id=uid, username=f"user_{uid}", email=f"{uid}@x.com", full_name=f"Nombre {uid}",
-                           role=role, is_active=True, sovra_identifier=identifier, **kw)
+                           role=role, is_active=True, sovra_identifier=identifier,
+                           sovra_holder_did=holder, **kw)
 
 
 def bearer(user):
@@ -76,7 +79,7 @@ class ApiTestCase(unittest.TestCase):
     def setUp(self):
         self.user = make_user("u1")
         self.db = FakeDB(self.user)
-        self.store = FakeStore({"12345678": UserRef("u1", True)})
+        self.store = FakeStore([linked("u1")])
         self.sovra = FakeSovra()
         self.svc = SovraLoginService(self.store, self.sovra, cfg())
 
@@ -159,9 +162,15 @@ class SovraLoginApi(ApiTestCase):
         self.assertEqual(r.json(), {"status": "failed"})
 
     def test_rechazo_no_revela_el_motivo(self):
-        self.store.users.clear()
+        self.store.accounts.clear()
         s = self.start()
         self.sovra.state = completed()
+        r = self.client.get(f"{BASE}/{s['login_id']}", headers={"X-Poll-Secret": s["poll_secret"]})
+        self.assertEqual(r.json(), {"status": "failed"})
+
+    def test_credencial_con_el_dni_correcto_pero_otra_wallet_no_entra(self):
+        s = self.start()
+        self.sovra.state = completed(holder=OTHER_HOLDER)
         r = self.client.get(f"{BASE}/{s['login_id']}", headers={"X-Poll-Secret": s["poll_secret"]})
         self.assertEqual(r.json(), {"status": "failed"})
 
@@ -169,7 +178,8 @@ class SovraLoginApi(ApiTestCase):
 class SovraLinkApi(ApiTestCase):
     def setUp(self):
         super().setUp()
-        self.store.users.clear()  # nadie tiene DNI vinculado todavía
+        self.store.accounts.clear()
+        self.store.accounts["u1"] = Account("u1")  # sin DNI ni wallet vinculados todavía
         self.h = bearer(self.user)
 
     def poll(self, s, headers=None, path="/link"):
@@ -193,16 +203,21 @@ class SovraLinkApi(ApiTestCase):
         self.sovra.state = completed(dni="12345678")
         r = self.poll(s)
         self.assertEqual((r.status_code, r.json()), (200, {"status": "ok"}))
-        self.assertEqual(self.store.users["12345678"].id, "u1")
+        acc = self.store.accounts["u1"]
+        self.assertEqual((acc.identifier, acc.holder), ("12345678", HOLDER))
 
     def test_motivos_de_rechazo_para_el_usuario_logueado(self):
-        self.store.users["12345678"] = UserRef("u2", True)
+        self.store.accounts["u2"] = Account("u2", "12345678", OTHER_HOLDER)
         s = self.start("/link/start", self.h)
         self.sovra.state = completed()
         self.assertEqual(self.poll(s).json(), {"status": "failed", "reason": "taken"})
 
-        self.store.users.clear()
-        self.store.users["99999999"] = UserRef("u1", True)  # u1 ya tiene otro DNI
+        del self.store.accounts["u2"]
+        self.store.accounts["u1"] = Account("u1", "99999999")  # el admin le cargó otro DNI
+        s = self.start("/link/start", self.h)
+        self.assertEqual(self.poll(s).json(), {"status": "failed", "reason": "mismatch"})
+
+        self.store.accounts["u1"] = linked("u1", "12345678", OTHER_HOLDER)  # ya tiene una wallet
         s = self.start("/link/start", self.h)
         self.assertEqual(self.poll(s).json(), {"status": "failed", "reason": "already_linked"})
 
@@ -219,11 +234,13 @@ class SovraLinkApi(ApiTestCase):
         self.sovra.state = completed(dni="12345678")
         r = self.client.get(f"{BASE}/{link['login_id']}", headers={"X-Poll-Secret": link["poll_secret"]})
         self.assertEqual(r.status_code, 404)  # /{id} con un intento de vinculación: no entrega tokens
-        self.assertEqual(self.store.users, {})  # y no se vinculó nada
+        self.assertIsNone(self.store.accounts["u1"].holder)  # y no se vinculó nada
 
     def test_me_informa_si_ya_vinculo(self):
         self.assertFalse(self.client.get("/api/v1/auth/me", headers=self.h).json()["sovra_linked"])
-        self.user.sovra_identifier = "12345678"
+        self.user.sovra_identifier = "12345678"  # DNI cargado por un admin, sin wallet: todavía no
+        self.assertFalse(self.client.get("/api/v1/auth/me", headers=self.h).json()["sovra_linked"])
+        self.user.sovra_holder_did = HOLDER
         self.assertTrue(self.client.get("/api/v1/auth/me", headers=self.h).json()["sovra_linked"])
 
 
@@ -231,7 +248,7 @@ class UsersApi(ApiTestCase):
     def setUp(self):
         super().setUp()
         self.admin = make_user("a1", UserRole.admin)
-        self.superu = make_user("s1", UserRole.superadmin, identifier="12345678")
+        self.superu = make_user("s1", UserRole.superadmin, identifier="12345678", holder=HOLDER)
         self.db.users.update({"a1": self.admin, "s1": self.superu})
 
     def test_listado_incluye_full_name_y_dni_solo_para_superadmin(self):
@@ -240,6 +257,7 @@ class UsersApi(ApiTestCase):
         self.assertEqual(sup[0]["sovra_identifier"], "12345678")
         self.assertEqual((sup[0]["full_name"], sup[0]["has_sovra_id"], sup[1]["has_sovra_id"]),
                          ("Nombre s1", True, False))
+        self.assertNotIn("sovra_holder_did", sup[0])  # el DID de la wallet no sale de la API
         adm = self.client.get("/api/v1/users/", headers=bearer(self.admin)).json()
         self.assertNotIn("sovra_identifier", adm[0])  # el admin ve que hay uno, no cuál
         self.assertEqual((adm[0]["has_sovra_id"], adm[1]["has_sovra_id"]), (True, False))
@@ -257,6 +275,23 @@ class UsersApi(ApiTestCase):
         self.user.sovra_identifier = "12345678"
         self.assertEqual(self.patch({"sovra_identifier": ""}).status_code, 200)
         self.assertIsNone(self.user.sovra_identifier)
+
+    def test_cambiar_el_dni_desvincula_la_wallet_y_repetirlo_no(self):
+        self.user.sovra_identifier, self.user.sovra_holder_did = "12345678", HOLDER
+        self.db.rows = []
+        self.assertEqual(self.patch({"sovra_identifier": "12.345.678", "full_name": "X"}).status_code, 200)
+        self.assertEqual(self.user.sovra_holder_did, HOLDER)  # el modal reenvía el mismo DNI: no desvincula
+        self.assertEqual(self.patch({"sovra_identifier": "87654321"}).status_code, 200)
+        self.assertIsNone(self.user.sovra_holder_did)
+
+    def test_quitar_el_dni_desvincula_la_wallet(self):
+        self.user.sovra_identifier, self.user.sovra_holder_did = "12345678", HOLDER
+        self.assertEqual(self.patch({"sovra_identifier": ""}).status_code, 200)
+        self.assertIsNone(self.user.sovra_holder_did)
+
+    def test_patch_no_puede_fijar_la_wallet(self):
+        self.assertEqual(self.patch({"sovra_holder_did": "did:sovra:0xevil"}).status_code, 200)
+        self.assertIsNone(self.user.sovra_holder_did)
 
     def test_patch_dni_invalido_es_422_y_repetido_es_409(self):
         self.assertEqual(self.patch({"sovra_identifier": "abc"}).status_code, 422)
@@ -302,8 +337,7 @@ class SovraLoginApiApagado(unittest.TestCase):
         try:
             with mock.patch.object(routers.settings, "SOVRA_LOGIN_ENABLED", True), \
                  mock.patch.object(routers.settings, "SOVRA_BASE_URL", "https://x.test"), \
-                 mock.patch.object(routers.settings, "SOVRA_API_KEY", "k"), \
-                 mock.patch.object(routers.settings, "SOVRA_LOGIN_VCT", ""):  # falta el tipo de credencial
+                 mock.patch.object(routers.settings, "SOVRA_API_KEY", ""):  # falta la API key
                 self.assertEqual(TestClient(app).post(f"{BASE}/start").status_code, 503)
         finally:
             app.dependency_overrides.clear()

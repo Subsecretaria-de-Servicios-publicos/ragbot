@@ -20,26 +20,35 @@ import httpx  # noqa: E402
 
 from app.services.sovra_client import SovraClient, SovraError  # noqa: E402
 from app.services.sovra_login import (  # noqa: E402
-    LoginRecord, PollResult, SovraLoginService, UserRef, build_login_dcql, extract_presented,
-    hash_poll_secret, issuer_matches, normalize_dni,
+    PollResult, SovraLoginService, UserRef, build_login_dcql, extract_presented,
+    hash_poll_secret, normalize_dni, normalize_holder_did,
 )
 
-ISSUER_DID = "did:sovra:0xabc"
-ISSUER_URL = f"https://api.example.com/{ISSUER_DID}"
+HOLDER = "did:sovra:0xholder1"
+OTHER_HOLDER = "did:sovra:0xholder2"
 T0 = datetime(2026, 11, 5, 12, 0, tzinfo=timezone.utc)
 
 
 def cfg(**over):
     base = dict(SOVRA_LOGIN_CLAIM="dni", SOVRA_LOGIN_VCT="EmpleadoPublico",
-                SOVRA_LOGIN_ISSUER_DID="", SOVRA_LOGIN_TTL_SECONDS=180)
+                SOVRA_LOGIN_TTL_SECONDS=180)
     base.update(over)
     return SimpleNamespace(**base)
 
 
+class Account:
+    def __init__(self, uid, identifier=None, holder=None, is_active=True):
+        self.id, self.identifier, self.holder, self.is_active = uid, identifier, holder, is_active
+
+
+def linked(uid="u1", dni="12345678", holder=HOLDER, **kw):
+    return Account(uid, dni, holder, **kw)
+
+
 class FakeStore:
-    def __init__(self, users=None):
+    def __init__(self, accounts=None):
         self.rows = {}
-        self.users = users or {}  # dni -> UserRef
+        self.accounts = {a.id: a for a in (accounts or [])}
 
     async def create(self, rec):
         self.rows[rec.id] = rec
@@ -58,16 +67,23 @@ class FakeStore:
         rec.status = "consumed"
         return True
 
-    async def find_user_by_identifier(self, identifier):
-        return self.users.get(identifier)
+    async def find_user_by_holder(self, holder_did):
+        for a in self.accounts.values():
+            if a.holder == holder_did:
+                return UserRef(a.id, a.is_active, a.identifier)
+        return None
 
-    async def link_identifier(self, user_id, identifier):
-        # Mismo contrato que el SQL: primero 'ya tenía uno', después 'lo tiene otro'
-        if any(u.id == user_id for u in self.users.values()):
-            return "already_linked"
-        if identifier in self.users:
+    async def link_identity(self, user_id, identifier, holder_did):
+        # Mismo contrato que el SQL: primero las condiciones del WHERE, después las únicas
+        acc = self.accounts.get(user_id)
+        if acc is None or acc.holder is not None:
+            return "already_linked" if acc and acc.holder else "mismatch"
+        if acc.identifier not in (None, identifier):
+            return "mismatch"
+        if any(o.id != user_id and (o.identifier == identifier or o.holder == holder_did)
+               for o in self.accounts.values()):
             return "taken"
-        self.users[identifier] = UserRef(user_id, True)
+        acc.identifier, acc.holder = identifier, holder_did
         return "ok"
 
 
@@ -88,11 +104,14 @@ class FakeSovra:
         return self.state
 
 
-def completed(dni="12345678", issuer=ISSUER_URL):
-    entry = {"id": "login", "claims": {"dni": dni}}
-    if issuer:
-        entry["iss"] = issuer
-    return {"status": "completed", "presentation_data": {"credentials": [entry]}}
+def completed(dni="12345678", holder=HOLDER):
+    """Forma real de Sovra: sin emisor ni tipo; el holder_did va al nivel de la verificación."""
+    state = {"status": "completed", "session_id": "sov-1",
+             "presentation_data": {"credentials": [
+                 {"id": "login", "format": "vc+sd-jwt", "claims": {"dni": dni}}]}}
+    if holder:
+        state["holder_did"] = holder
+    return state
 
 
 class Clock:
@@ -118,26 +137,27 @@ class PureFunctions(unittest.TestCase):
         self.assertNotIn("meta", build_login_dcql("dni", "")["credentials"][0])
 
     def test_extract_presented_formas(self):
-        self.assertEqual(extract_presented({"credentials": [{"claims": {"dni": "1"}, "iss": "X"}]}, "dni"), ("1", "X"))
-        self.assertEqual(extract_presented({"credentials": {"login": {"claims": {"dni": "2"}}}}, "dni"), ("2", None))
-        self.assertEqual(extract_presented({"claims": {"dni": "3"}}, "dni"), ("3", None))
-        self.assertEqual(extract_presented({"dni": "4", "issuer": "Y"}, "dni"), ("4", "Y"))
+        self.assertEqual(extract_presented({"credentials": [{"claims": {"dni": "1"}}]}, "dni"), "1")
+        self.assertEqual(extract_presented({"credentials": {"login": {"claims": {"dni": "2"}}}}, "dni"), "2")
+        self.assertEqual(extract_presented({"claims": {"dni": "3"}}, "dni"), "3")
+        self.assertEqual(extract_presented({"dni": "4"}, "dni"), "4")
         for bad in (None, {}, [], "x", {"credentials": []}, {"credentials": [{"claims": {"otro": "1"}}]}):
-            self.assertEqual(extract_presented(bad, "dni"), (None, None))
+            self.assertIsNone(extract_presented(bad, "dni"))
 
-    def test_issuer_matches(self):
-        self.assertTrue(issuer_matches(ISSUER_URL, ISSUER_DID))
-        self.assertTrue(issuer_matches(ISSUER_URL + "/", ISSUER_DID))
-        self.assertTrue(issuer_matches(ISSUER_DID, ISSUER_DID))
-        self.assertFalse(issuer_matches("https://x.com/did:sovra:0xabcd", ISSUER_DID))  # sufijo no es el DID
-        self.assertFalse(issuer_matches("https://x.com/did:sovra:0xevil", ISSUER_DID))
-        self.assertFalse(issuer_matches(None, ISSUER_DID))
-        self.assertFalse(issuer_matches(ISSUER_URL, ""))
+    def test_extract_presented_ejemplo_real_de_sovra(self):
+        ejemplo = {"credentials": [{"id": "identity", "format": "vc+sd-jwt",
+                                    "claims": {"givenName": "A", "nationalId": "12.345.678"}}]}
+        self.assertEqual(extract_presented(ejemplo, "nationalId"), "12.345.678")
+
+    def test_normalize_holder_did(self):
+        self.assertEqual(normalize_holder_did(" did:sovra:0xabc "), "did:sovra:0xabc")
+        for bad in (None, "", "   ", "no-es-un-did", 123, {"a": 1}, "did:" + "x" * 300):
+            self.assertIsNone(normalize_holder_did(bad), bad)
 
 
 class LoginFlow(unittest.IsolatedAsyncioTestCase):
     def make(self, users=None, **cfg_over):
-        self.store = FakeStore(users if users is not None else {"12345678": UserRef("u1", True)})
+        self.store = FakeStore(users if users is not None else [linked()])
         self.sovra = FakeSovra()
         self.clock = Clock()
         self.svc = SovraLoginService(self.store, self.sovra, cfg(**cfg_over), self.clock)
@@ -207,10 +227,15 @@ class LoginFlow(unittest.IsolatedAsyncioTestCase):
 
     async def test_rechazos_se_ven_igual_desde_afuera_pero_se_distinguen_en_el_log(self):
         casos = [
-            ("dni sin usuario", {"99999999": UserRef("u9", True)}, completed(), "no_user_for_identifier"),
-            ("usuario inactivo", {"12345678": UserRef("u1", False)}, completed(), "user_inactive"),
-            ("sin dni en la presentacion", None, {"status": "completed", "presentation_data": {}}, "no_identifier_in_presentation"),
+            ("wallet sin vincular", [linked(holder=OTHER_HOLDER)], completed(), "holder_not_linked"),
+            ("DNI cargado por el admin pero sin vincular", [Account("u1", "12345678")], completed(), "holder_not_linked"),
+            ("usuario inactivo", [linked(is_active=False)], completed(), "user_inactive"),
+            ("mismo holder, otro DNI", [linked(dni="11111111")], completed(), "identifier_mismatch"),
+            ("sin dni en la presentacion", None, {"status": "completed", "holder_did": HOLDER, "presentation_data": {}},
+             "no_identifier_in_presentation"),
             ("dni invalido", None, completed(dni="abc"), "no_identifier_in_presentation"),
+            ("sin holder_did", None, completed(holder=None), "no_holder_did"),
+            ("holder_did raro", None, completed(holder="no-es-un-did"), "no_holder_did"),
             ("sovra failed", None, {"status": "failed", "error": "credential_revoked"}, "sovra_failed:credential_revoked"),
         ]
         for nombre, users, sov_state, motivo in casos:
@@ -222,24 +247,22 @@ class LoginFlow(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.store.rows[r.login_id].error, motivo)
                 self.assertIsNone(self.store.rows[r.login_id].user_id)
 
-    async def test_pin_de_emisor(self):
-        casos = [
-            ("coincide", completed(issuer=ISSUER_URL), "ok"),
-            ("otro emisor", completed(issuer="https://x.com/did:sovra:0xevil"), "failed"),
-            ("Sovra no informa emisor: falla cerrado", completed(issuer=None), "failed"),
-        ]
-        for nombre, state, esperado in casos:
-            with self.subTest(nombre):
-                self.make(SOVRA_LOGIN_ISSUER_DID=ISSUER_DID)
-                r = await self.start()
-                self.sovra.state = state
-                self.assertEqual((await self.svc.poll(r.login_id, r.poll_secret)).status, esperado)
-
-    async def test_sin_pin_de_emisor_no_se_exige_emisor(self):
+    async def test_credencial_ajena_con_el_dni_de_otro_usuario_no_entra(self):
+        # El ataque que motivó el holder_did: otra wallet presenta una credencial (de cualquier
+        # emisor) con el DNI de u1. El DNI coincide, el holder no.
         self.make()
         r = await self.start()
-        self.sovra.state = completed(issuer=None)
-        self.assertEqual((await self.svc.poll(r.login_id, r.poll_secret)).status, "ok")
+        self.sovra.state = completed(dni="12345678", holder=OTHER_HOLDER)
+        self.assertEqual(await self.svc.poll(r.login_id, r.poll_secret), PollResult("failed"))
+        self.assertEqual(self.store.rows[r.login_id].error, "holder_not_linked")
+
+    async def test_el_usuario_sale_del_holder_no_del_dni_de_otro(self):
+        # Dos usuarios; la wallet de u2 presenta el DNI de u1: se rechaza, no entra como ninguno
+        self.make(users=[linked("u1", "11111111", HOLDER), linked("u2", "22222222", OTHER_HOLDER)])
+        r = await self.start()
+        self.sovra.state = completed(dni="11111111", holder=OTHER_HOLDER)
+        self.assertEqual(await self.svc.poll(r.login_id, r.poll_secret), PollResult("failed"))
+        self.assertEqual(self.store.rows[r.login_id].error, "identifier_mismatch")
 
     async def test_vencimiento_propio(self):
         self.make()
@@ -272,20 +295,20 @@ class LoginFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.svc.poll(r.login_id, r.poll_secret), PollResult("pending"))
 
     async def test_un_intento_fallido_no_se_reabre(self):
-        self.make(users={})
+        self.make(users=[])
         r = await self.start()
         self.sovra.state = completed()
         self.assertEqual((await self.svc.poll(r.login_id, r.poll_secret)).status, "failed")
         # Aunque ahora exista el usuario, ese intento ya quedó cerrado
-        self.store.users["12345678"] = UserRef("u1", True)
+        self.store.accounts["u1"] = linked()
         self.assertEqual((await self.svc.poll(r.login_id, r.poll_secret)).status, "failed")
 
 
 class LinkFlow(unittest.IsolatedAsyncioTestCase):
-    """Un usuario ya logueado vincula el DNI de su credencial a su cuenta."""
+    """Un usuario ya logueado vincula su wallet (holder_did + DNI de la credencial) a su cuenta."""
 
     def make(self, users=None, **cfg_over):
-        self.store = FakeStore(users if users is not None else {})
+        self.store = FakeStore(users if users is not None else [Account("u1")])
         self.sovra = FakeSovra()
         self.clock = Clock()
         self.svc = SovraLoginService(self.store, self.sovra, cfg(**cfg_over), self.clock)
@@ -296,45 +319,68 @@ class LinkFlow(unittest.IsolatedAsyncioTestCase):
     async def link_poll(self, r, user_id="u1"):
         return await self.svc.poll(r.login_id, r.poll_secret, purpose="link", user_id=user_id)
 
-    async def test_vincula_el_dni_de_la_credencial_al_usuario_del_token(self):
+    async def test_vincula_dni_y_wallet_al_usuario_del_token(self):
         self.make()
         r = await self.link_start()
         rec = self.store.rows[r.login_id]
         self.assertEqual((rec.purpose, rec.link_user_id), ("link", "u1"))
         self.sovra.state = completed(dni="12.345.678")
         self.assertEqual(await self.link_poll(r), PollResult("ok", user_id="u1"))
-        self.assertEqual(self.store.users["12345678"].id, "u1")
+        acc = self.store.accounts["u1"]
+        self.assertEqual((acc.identifier, acc.holder), ("12345678", HOLDER))
         # Un solo uso
         self.assertEqual((await self.link_poll(r)).status, "failed")
 
-    async def test_dni_de_otro_usuario_informa_taken(self):
-        self.make(users={"12345678": UserRef("u2", True)})
-        r = await self.link_start("u1")
-        self.sovra.state = completed()
-        res = await self.link_poll(r, "u1")
-        self.assertEqual((res.status, res.reason), ("failed", "taken"))
-        self.assertEqual(self.store.users["12345678"].id, "u2")  # no se tocó
-        # El motivo también se informa en consultas posteriores
-        self.assertEqual((await self.link_poll(r, "u1")).reason, "taken")
+    async def test_vincula_cuando_el_admin_ya_cargo_el_mismo_dni(self):
+        self.make(users=[Account("u1", "12345678")])
+        r = await self.link_start()
+        self.sovra.state = completed(dni="12.345.678")
+        self.assertEqual((await self.link_poll(r)).status, "ok")
+        self.assertEqual(self.store.accounts["u1"].holder, HOLDER)
 
-    async def test_usuario_con_dni_ya_vinculado_no_puede_cambiarlo(self):
-        self.make(users={"11111111": UserRef("u1", True)})
-        r = await self.link_start("u1")
+    async def test_dni_distinto_al_que_cargo_el_admin_informa_mismatch(self):
+        self.make(users=[Account("u1", "11111111")])
+        r = await self.link_start()
         self.sovra.state = completed(dni="22222222")
+        res = await self.link_poll(r)
+        self.assertEqual((res.status, res.reason), ("failed", "mismatch"))
+        self.assertIsNone(self.store.accounts["u1"].holder)
+        self.assertEqual(self.store.accounts["u1"].identifier, "11111111")
+
+    async def test_wallet_o_dni_de_otro_usuario_informa_taken(self):
+        for nombre, otro, state in (
+            ("dni ajeno", Account("u2", "12345678", OTHER_HOLDER), completed()),
+            ("wallet ajena", Account("u2", "99999999", HOLDER), completed()),
+        ):
+            with self.subTest(nombre):
+                self.make(users=[Account("u1"), otro])
+                r = await self.link_start("u1")
+                self.sovra.state = state
+                res = await self.link_poll(r, "u1")
+                self.assertEqual((res.status, res.reason), ("failed", "taken"))
+                self.assertEqual(self.store.accounts["u2"].id, "u2")
+                self.assertIsNone(self.store.accounts["u1"].holder)
+                # El motivo también se informa en consultas posteriores
+                self.assertEqual((await self.link_poll(r, "u1")).reason, "taken")
+
+    async def test_usuario_con_wallet_ya_vinculada_no_puede_cambiarla(self):
+        self.make(users=[linked("u1", "11111111", HOLDER)])
+        r = await self.link_start("u1")
+        self.sovra.state = completed(dni="11111111", holder=OTHER_HOLDER)
         res = await self.link_poll(r, "u1")
         self.assertEqual((res.status, res.reason), ("failed", "already_linked"))
-        self.assertNotIn("22222222", self.store.users)
+        self.assertEqual(self.store.accounts["u1"].holder, HOLDER)
 
-    async def test_el_emisor_tambien_se_exige_al_vincular(self):
-        self.make(SOVRA_LOGIN_ISSUER_DID=ISSUER_DID)
+    async def test_sin_holder_did_no_se_vincula(self):
+        self.make()
         r = await self.link_start()
-        self.sovra.state = completed(issuer="https://x.com/did:sovra:0xevil")
+        self.sovra.state = completed(holder=None)
         res = await self.link_poll(r)
         self.assertEqual((res.status, res.reason), ("failed", None))  # sin motivo detallado
-        self.assertEqual(self.store.users, {})
+        self.assertIsNone(self.store.accounts["u1"].holder)
 
     async def test_un_intento_de_vincular_no_se_cobra_como_login_ni_al_reves(self):
-        self.make(users={"12345678": UserRef("u1", True)})
+        self.make(users=[linked("u1")])
         link = await self.link_start("u2")
         self.sovra.state = completed()
         self.assertIsNone(await self.svc.poll(link.login_id, link.poll_secret, purpose="login"))
@@ -358,11 +404,26 @@ class LinkFlow(unittest.IsolatedAsyncioTestCase):
 
     async def test_login_rechazado_no_expone_motivo(self):
         # En 'login' nadie está autenticado todavía: el motivo no sale nunca
-        self.make(users={})
+        self.make(users=[])
         r = await self.svc.start("1.2.3.4", "UA")
         self.sovra.state = completed()
         res = await self.svc.poll(r.login_id, r.poll_secret)
         self.assertEqual((res.status, res.reason), ("failed", None))
+
+    async def test_login_sin_vinculacion_previa_no_entra_aunque_el_admin_cargo_el_dni(self):
+        # "Vinculación previa obligatoria": DNI cargado + credencial correcta, pero nunca vinculó
+        self.make(users=[Account("u1", "12345678")])
+        r = await self.svc.start("1.2.3.4", "UA")
+        self.sovra.state = completed()
+        self.assertEqual(await self.svc.poll(r.login_id, r.poll_secret), PollResult("failed"))
+
+    async def test_flujo_completo_vincular_y_despues_entrar(self):
+        self.make(users=[Account("u1", "12345678")])
+        link = await self.link_start()
+        self.sovra.state = completed()
+        self.assertEqual((await self.link_poll(link)).status, "ok")
+        login = await self.svc.start("1.2.3.4", "UA")
+        self.assertEqual(await self.svc.poll(login.login_id, login.poll_secret), PollResult("ok", user_id="u1"))
 
 
 class ClientTests(unittest.IsolatedAsyncioTestCase):

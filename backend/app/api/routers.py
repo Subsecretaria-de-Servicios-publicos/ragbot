@@ -339,9 +339,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
 # (users.sovra_identifier). Lógica en services/sovra_login.py. Apagado por defecto.
 
 def _sovra_login_configured() -> bool:
-    # Sin SOVRA_LOGIN_VCT cualquier credencial con el claim del DNI serviría, sin importar el
-    # tipo: se exige configurarlo para que el login pueda activarse.
-    return bool(settings.SOVRA_BASE_URL and settings.SOVRA_API_KEY and settings.SOVRA_LOGIN_VCT)
+    return bool(settings.SOVRA_BASE_URL and settings.SOVRA_API_KEY)
 
 
 @auth_router.get("/methods")
@@ -408,9 +406,10 @@ async def sovra_login_start(request: Request, db: AsyncSession = Depends(get_db)
 
 
 # Vincular: un usuario YA logueado asocia el DNI de su credencial a su cuenta (en vez de que un
-# superadmin lo tipee). El usuario sale del token, nunca del navegador. Solo si todavía no tiene
-# DNI vinculado: cambiarlo lo hace un admin (con un token robado se podría, si no, vincular una
-# credencial ajena y quedar con una puerta de entrada permanente a esa cuenta).
+# superadmin lo tipee) y fija la wallet (holder_did) que después puede entrar por Sovra ID. El
+# usuario sale del token, nunca del navegador. Solo si todavía no tiene wallet vinculada y su DNI
+# está sin cargar o es el de la credencial: cambiarla lo hace un admin (con un token robado se
+# podría, si no, vincular una wallet ajena y quedar con una puerta de entrada permanente).
 @auth_router.post("/sovra/link/start", status_code=201)
 async def sovra_link_start(request: Request, payload: dict = Depends(get_current_user_payload),
                            db: AsyncSession = Depends(get_db)):
@@ -427,7 +426,7 @@ async def sovra_link_status(login_id: str, x_poll_secret: Optional[str] = Header
         raise HTTPException(404, "Intento de vinculación inexistente")
     out = {"status": res.status}
     if res.reason:
-        out["reason"] = res.reason  # 'taken' | 'already_linked'
+        out["reason"] = res.reason  # 'taken' | 'already_linked' | 'mismatch'
     return out
 
 
@@ -468,7 +467,7 @@ async def me(payload: dict = Depends(get_current_user_payload), db: AsyncSession
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     return {"id": user.id, "email": user.email, "username": user.username,
             "role": user.role.value, "full_name": user.full_name,
-            "sovra_linked": bool(user.sovra_identifier)}
+            "sovra_linked": bool(user.sovra_holder_did)}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -487,7 +486,7 @@ async def list_users(payload: dict = Depends(require_role("admin")), db: AsyncSe
     is_super = payload["role"] == "superadmin"
     return [{"id": u.id, "email": u.email, "username": u.username, "full_name": u.full_name,
              "role": u.role.value, "is_active": u.is_active,
-             "has_sovra_id": bool(u.sovra_identifier),
+             "has_sovra_id": bool(u.sovra_holder_did),  # wallet vinculada = puede entrar por Sovra ID
              **({"sovra_identifier": u.sovra_identifier} if is_super else {})} for u in users]
 
 
@@ -518,9 +517,12 @@ async def update_user(user_id: str, data: dict, payload: dict = Depends(require_
             dup = await db.execute(select(User.id).where(User.sovra_identifier == ident, User.id != user_id))
             if dup.first():
                 raise HTTPException(status_code=409, detail="Ese DNI ya está asignado a otro usuario")
+        if ident != user.sovra_identifier:
+            # Otro DNI = otra persona: la wallet vinculada deja de valer y hay que volver a vincular
+            user.sovra_holder_did = None
         data = {**data, "sovra_identifier": ident}
     for k, v in data.items():
-        if hasattr(user, k) and k not in ("id", "hashed_password"):
+        if hasattr(user, k) and k not in ("id", "hashed_password", "sovra_holder_did"):
             setattr(user, k, v)
     if "password" in data:
         user.hashed_password = hash_password(data["password"])

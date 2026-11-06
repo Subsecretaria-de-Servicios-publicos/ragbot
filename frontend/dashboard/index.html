@@ -1289,7 +1289,7 @@
       <div class="form-group">
         <label class="form-label">DNI para entrar con Sovra ID</label>
         <input class="form-input" id="eu-sovra-id" inputmode="numeric" autocomplete="off" placeholder="Sin DNI no puede usar ese ingreso">
-        <div class="form-hint">Solo el número (se ignoran puntos y espacios). El usuario también puede vincularlo solo desde su cuenta con "Vincular Sovra ID". Vacío = sin acceso por Sovra.</div>
+        <div class="form-hint">Solo el número (se ignoran puntos y espacios). Cargarlo no alcanza: el usuario tiene que entrar con su contraseña y tocar "Vincular Sovra ID" con la credencial de ese DNI. Cambiar o quitar el DNI desvincula su wallet.</div>
       </div>
       <div class="form-group">
         <label class="form-label">Nueva Contraseña</label>
@@ -1665,6 +1665,7 @@ function cancelSovraLogin() { sovraLoginFlow.cancel(); }
 const SOVRA_LINK_REASONS = {
   taken: 'Ese DNI ya está vinculado a otro usuario. Contactá al administrador.',
   already_linked: 'Tu usuario ya tiene un Sovra ID vinculado. Para cambiarlo, pedíselo a un administrador.',
+  mismatch: 'El DNI de esta credencial no es el que tiene cargado tu usuario. Contactá al administrador.',
 };
 
 const sovraLinkFlow = createSovraFlow({
@@ -3112,10 +3113,14 @@ async function loadUsers() {
   } catch(e) { tbody.innerHTML = `<tr><td colspan="7" style="color:var(--danger)">Sin acceso</td></tr>`; }
 }
 
-// El superadmin ve el DNI; el admin solo si hay uno vinculado (el backend no se lo manda)
+// El superadmin ve el DNI y si ya vinculó su wallet; el admin solo si hay wallet vinculada (el backend no le manda el DNI)
 function sovraIdCell(u) {
-  if (u.sovra_identifier) return `<span class="text-mono">${escapeHtml(u.sovra_identifier)}</span>`;
-  if (u.has_sovra_id) return '<span title="Tiene un DNI vinculado">✓ vinculado</span>';
+  if (u.sovra_identifier) {
+    return u.has_sovra_id
+      ? `<span class="text-mono">${escapeHtml(u.sovra_identifier)}</span> <span title="Wallet vinculada: puede entrar con Sovra ID">✓</span>`
+      : `<span class="text-mono">${escapeHtml(u.sovra_identifier)}</span> <span class="text-muted" title="Todavía no vinculó su wallet: no puede entrar con Sovra ID">· sin vincular</span>`;
+  }
+  if (u.has_sovra_id) return '<span title="Wallet vinculada: puede entrar con Sovra ID">✓ vinculado</span>';
   return '<span class="text-muted">—</span>';
 }
 

@@ -88,19 +88,17 @@ class Settings(BaseSettings):
 
     # ─── LOGIN AL DASHBOARD CON SOVRA ID ────────────────────
     # Segundo método de login (junto al de usuario/contraseña): el usuario presenta una credencial
-    # verificable desde su wallet y se lo busca por SOVRA_LOGIN_CLAIM (DNI). La credencial solo
-    # prueba quién es; el rol sale siempre de la tabla users. Apagado por defecto.
+    # verificable desde su wallet y se lo busca por el holder_did de la wallet que vinculó antes
+    # (con su contraseña); el claim SOVRA_LOGIN_CLAIM (DNI) debe coincidir con el de su usuario.
+    # El rol sale siempre de la tabla users. Apagado por defecto.
     SOVRA_LOGIN_ENABLED: bool = False
     SOVRA_BASE_URL: str = ""          # ej. https://test-api-sovra.flagonsa.com (solo https, o localhost)
     SOVRA_API_KEY: str = ""           # sovra_sk_... del workspace; secreto de servidor
     SOVRA_LOGIN_CLAIM: str = "dni"    # key literal del claim en el esquema de la credencial
-    # Tipo de credencial aceptado (vct, ej. "EmpleadoPublico"). Se pide en el DCQL como
-    # meta.vct_values. Sin esto cualquier credencial con ese claim serviría: configurarlo es
-    # obligatorio para activar el login.
+    # Tipo de credencial (vct, ej. "EmpleadoPublico"). Opcional: se pide en el DCQL como
+    # meta.vct_values, pero Sovra no informa el tipo en el resultado ni confirmó que lo haga
+    # cumplir; la defensa es el holder_did vinculado, no esto.
     SOVRA_LOGIN_VCT: str = ""
-    # DID del emisor aceptado. Si se define, el login falla salvo que Sovra informe un emisor que
-    # coincida (cierra el caso de una credencial de otro emisor con los mismos claims).
-    SOVRA_LOGIN_ISSUER_DID: str = ""
     SOVRA_LOGIN_TTL_SECONDS: int = 180    # vigencia del intento de login (Sovra permite hasta 600)
     SOVRA_START_RATE_LIMIT: int = 10      # intentos de login por IP y ventana (cada uno crea una sesión en Sovra)
     SOVRA_START_RATE_WINDOW_SECONDS: int = 60

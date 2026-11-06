@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,23 +53,29 @@ class SqlLoginStore:
         await self.db.commit()
         return won
 
-    async def link_identifier(self, user_id: str, identifier: str) -> str:
-        # El IS NULL evita pisar un DNI ya vinculado (cambiarlo es cosa de un admin). La restricción
-        # única de la columna garantiza que dos usuarios no queden con el mismo DNI aunque dos
-        # vinculaciones corran a la vez: la perdedora falla con IntegrityError.
+    async def link_identity(self, user_id: str, identifier: str, holder_did: str) -> str:
+        # Las condiciones del WHERE son el candado: sin wallet vinculada (no se pisa una existente;
+        # cambiarla es cosa de un admin) y con el DNI sin cargar o igual al de la credencial. Las
+        # restricciones únicas de ambas columnas garantizan que dos usuarios no compartan DNI ni
+        # wallet aunque dos vinculaciones corran a la vez: la perdedora falla con IntegrityError.
         try:
             res = await self.db.execute(
-                update(User).where(User.id == user_id, User.sovra_identifier.is_(None))
-                .values(sovra_identifier=identifier).returning(User.id))
-            linked = res.first() is not None
+                update(User)
+                .where(User.id == user_id, User.sovra_holder_did.is_(None),
+                       or_(User.sovra_identifier.is_(None), User.sovra_identifier == identifier))
+                .values(sovra_identifier=identifier, sovra_holder_did=holder_did).returning(User.id))
+            if res.first() is not None:
+                await self.db.commit()
+                return "ok"
+            row = (await self.db.execute(select(User.sovra_holder_did).where(User.id == user_id))).first()
             await self.db.commit()
         except IntegrityError:
             await self.db.rollback()
             return "taken"
-        return "ok" if linked else "already_linked"
+        return "already_linked" if row and row.sovra_holder_did else "mismatch"
 
-    async def find_user_by_identifier(self, identifier: str) -> Optional[UserRef]:
+    async def find_user_by_holder(self, holder_did: str) -> Optional[UserRef]:
         res = await self.db.execute(
-            select(User.id, User.is_active).where(User.sovra_identifier == identifier))
+            select(User.id, User.is_active, User.sovra_identifier).where(User.sovra_holder_did == holder_did))
         row = res.first()
-        return UserRef(id=row.id, is_active=row.is_active) if row else None
+        return UserRef(id=row.id, is_active=row.is_active, identifier=row.sovra_identifier) if row else None
